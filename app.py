@@ -4,6 +4,8 @@ import pandas as pd
 import io
 import json
 import os
+import hashlib
+import base64
 from dataclasses import dataclass
 from io import BytesIO
 from openpyxl import load_workbook
@@ -25,7 +27,7 @@ except Exception:
     HAS_STATSMODELS = False
 
 
-# ---------- ВНЕШНИЙ ВИД (CSS) ----------
+# ---------- ВНЕШНЙ ВД (CSS) ----------
 
 st.set_page_config(page_title="Медиапланер 12 месяцев (кампании)", layout="wide")
 
@@ -242,7 +244,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------- МОДЕЛЬ И ФУНКЦИИ РАСЧЁТА ----------
+# ---------- МОДЕЛЬ  ФУНКЦ РАСЧЁТА ----------
 
 @dataclass
 class PlanInput:
@@ -368,6 +370,27 @@ def parse_float_loose(value, default: float = 0.0) -> float:
         return float(default)
 
 
+def image_file_to_data_uri(image_path: str) -> str | None:
+    if not image_path or not os.path.exists(image_path):
+        return None
+    ext = os.path.splitext(image_path)[1].lower()
+    mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+    }.get(ext)
+    if not mime:
+        return None
+    try:
+        raw = open(image_path, "rb").read()
+    except Exception:
+        return None
+    encoded = base64.b64encode(raw).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
 def _df_to_payload(df: pd.DataFrame | None) -> dict:
     if df is None or not isinstance(df, pd.DataFrame):
         return {"columns": [], "rows": []}
@@ -386,6 +409,97 @@ def _df_from_payload(payload: dict | None) -> pd.DataFrame:
     if not isinstance(cols, list) or not isinstance(rows, list):
         return pd.DataFrame()
     return pd.DataFrame(rows, columns=cols if cols else None)
+
+
+def _bootstrap_reference_from_campaigns(campaigns_df: pd.DataFrame | None) -> None:
+    """
+    Prepare quick-reference sidebar data right after import.
+    This keeps "Быстрая сверка" usable even before full recalculation blocks run.
+    """
+    if campaigns_df is None or not isinstance(campaigns_df, pd.DataFrame) or campaigns_df.empty:
+        return
+
+    required_cols = {"campaign_type", "impressions_avg", "ctr_avg_percent", "cpc_avg", "cr_avg_percent", "aov_avg"}
+    if not required_cols.issubset(set(campaigns_df.columns)):
+        return
+
+    work = campaigns_df.copy()
+    work["campaign_type"] = work["campaign_type"].astype(str).str.strip()
+    work = work[work["campaign_type"] != ""]
+    if work.empty:
+        return
+
+    use_vat = bool(st.session_state.get("use_vat_budget_metrics", True))
+    base_by_campaign = {}
+    total_imp = total_clicks = total_conv = total_cost = total_rev = 0.0
+
+    for _, row in work.iterrows():
+        inp = PlanInput(
+            impressions=max(0.0, parse_float_loose(row.get("impressions_avg"), 0.0)),
+            ctr=max(0.0, parse_float_loose(row.get("ctr_avg_percent"), 0.0) / 100.0),
+            cpc=max(0.0, parse_float_loose(row.get("cpc_avg"), 0.0)),
+            cr=max(0.0, parse_float_loose(row.get("cr_avg_percent"), 0.0) / 100.0),
+            aov=max(0.0, parse_float_loose(row.get("aov_avg"), 0.0)),
+        )
+        out = calculate_plan_month(inp)
+        camp = str(row.get("campaign_type", "")).strip()
+        if not camp:
+            continue
+
+        imp = float(out.get("impressions", 0.0))
+        clicks = float(out.get("clicks", 0.0))
+        conv = float(out.get("conversions", 0.0))
+        cost = float(out.get("cost", 0.0))
+        rev = float(out.get("revenue", 0.0))
+        cost_with_vat = cost * (1.0 + VAT_RATE)
+        budget_basis = cost_with_vat if use_vat else cost
+        cpo = (budget_basis / conv) if conv > 0 else 0.0
+        roas = (rev / budget_basis * 100.0) if budget_basis > 0 else 0.0
+        drr = (budget_basis / rev * 100.0) if rev > 0 else 0.0
+
+        base_by_campaign[camp] = {
+            "impressions": imp,
+            "clicks": clicks,
+            "conversions": conv,
+            "cost": cost,
+            "cost_with_vat": cost_with_vat,
+            "cost_with_vat_ak": cost_with_vat,
+            "revenue": rev,
+            "ctr": (clicks / imp * 100.0) if imp > 0 else 0.0,
+            "cpc": (cost / clicks) if clicks > 0 else 0.0,
+            "cr": (conv / clicks * 100.0) if clicks > 0 else 0.0,
+            "cpo": cpo,
+            "roas": roas,
+            "drr": drr,
+        }
+
+        total_imp += imp
+        total_clicks += clicks
+        total_conv += conv
+        total_cost += cost
+        total_rev += rev
+
+    if not base_by_campaign:
+        return
+
+    total_cost_with_vat = total_cost * (1.0 + VAT_RATE)
+    total_budget_basis = total_cost_with_vat if use_vat else total_cost
+    st.session_state["mp_ref_base_by_campaign"] = base_by_campaign
+    st.session_state["mp_ref_base"] = {
+        "impressions": float(total_imp),
+        "clicks": float(total_clicks),
+        "conversions": float(total_conv),
+        "cost": float(total_cost),
+        "cost_with_vat": float(total_cost_with_vat),
+        "cost_with_vat_ak": float(total_cost_with_vat),
+        "revenue": float(total_rev),
+        "ctr": float((total_clicks / total_imp * 100.0) if total_imp > 0 else 0.0),
+        "cpc": float((total_cost / total_clicks) if total_clicks > 0 else 0.0),
+        "cr": float((total_conv / total_clicks * 100.0) if total_clicks > 0 else 0.0),
+        "cpo": float((total_budget_basis / total_conv) if total_conv > 0 else 0.0),
+        "roas": float((total_rev / total_budget_basis * 100.0) if total_budget_basis > 0 else 0.0),
+        "drr": float((total_budget_basis / total_rev * 100.0) if total_rev > 0 else 0.0),
+    }
 
 
 def export_project_state_payload() -> dict:
@@ -468,6 +582,7 @@ def import_project_state_payload(payload: dict) -> tuple[bool, str]:
     st.session_state["planning_months_multiselect"] = list(state.get("planning_months_multiselect", []))
     preset_key = str(state.get("metric_preset_key", "ecom"))
     st.session_state["metric_preset_key"] = preset_key if preset_key in METRIC_PRESETS else "ecom"
+    _bootstrap_reference_from_campaigns(st.session_state.get("campaigns_df"))
 
     return True, "Данные проекта импортированы."
 
@@ -476,6 +591,30 @@ if "_pending_project_import_payload" in st.session_state:
     _pending_payload = st.session_state.pop("_pending_project_import_payload")
     _ok, _msg = import_project_state_payload(_pending_payload)
     st.session_state["_pending_project_import_result"] = {"ok": bool(_ok), "msg": str(_msg)}
+
+
+def queue_project_import_from_upload(uploaded_file, source_key: str) -> None:
+    """
+    Queue project import from a Streamlit UploadedFile only once per file content.
+    Prevents rerun loops when uploader keeps the selected file between reruns.
+    """
+    sig_key = f"_project_upload_sig_{source_key}"
+    if uploaded_file is None:
+        st.session_state.pop(sig_key, None)
+        return
+
+    raw_bytes = uploaded_file.getvalue()
+    payload_sig = hashlib.sha1(raw_bytes).hexdigest()
+    if st.session_state.get(sig_key) == payload_sig:
+        return
+
+    st.session_state[sig_key] = payload_sig
+    try:
+        imported_payload = json.loads(raw_bytes.decode("utf-8"))
+        st.session_state["_pending_project_import_payload"] = imported_payload
+        st.rerun()
+    except Exception as e:
+        st.error(f"Не удалось прочитать файл проекта: {e}")
 
 
 def make_ak_rules_signature(ak_rules_df: pd.DataFrame | None) -> tuple:
@@ -726,8 +865,8 @@ def reorder_rows_with_segment_subtotals(
 
     work = df_show.copy()
     campaign_vals = work[campaign_col].astype(str)
-    is_total_any = campaign_vals.str.startswith("Итого")
-    is_total_grand = campaign_vals.eq("Итого")
+    is_total_any = campaign_vals.str.startswith("того")
+    is_total_grand = campaign_vals.eq("того")
     is_total_segment = is_total_any & ~is_total_grand
     is_campaign = ~is_total_any
 
@@ -744,7 +883,7 @@ def reorder_rows_with_segment_subtotals(
         if not seg_campaigns.empty:
             ordered_parts.append(seg_campaigns)
             used_idx.update(seg_campaigns.index.tolist())
-            seg_total = work[is_total_segment & (campaign_vals == f"Итого {seg}")]
+            seg_total = work[is_total_segment & (campaign_vals == f"того {seg}")]
             if not seg_total.empty:
                 ordered_parts.append(seg_total)
                 used_idx.update(seg_total.index.tolist())
@@ -868,7 +1007,6 @@ TEMPLATE_PATHS_ECOM = [
     os.path.join(BASE_DIR, "templates", "Шаблоны МП.xlsx"),
     os.path.join(BASE_DIR, "Шаблоны МП.xlsx"),
     os.path.join(BASE_DIR, "Shablony-MP.xlsx"),
-    r"C:\Users\user\Downloads\Шаблоны МП (1).xlsx",
 ]
 TEMPLATE_PATHS_DIY = [
     os.path.join(BASE_DIR, "templates", "Шаблоны МП DIY.xlsx"),
@@ -1247,44 +1385,139 @@ def resolve_template_path(template_kind: str = "ecom") -> str | None:
     return max(existing_templates, key=os.path.getmtime)
 
 
-# ---------- ЗАГОЛОВОК И ТАБЫ ----------
+# ---------- ЗАГОЛОВОК  ТАБЫ ----------
 
-st.markdown(
-    """
-    <h1 style="font-weight: 700; letter-spacing: 0.02em;">
-        Медиапланер
-        <span style="color: #00CDC5; font-size: 1.25em;">E‑promo</span>:
-        типы РК → месяцы с коэффициентами
-    </h1>
-    """,
-    unsafe_allow_html=True,
-)
+coeff_header_uri = image_file_to_data_uri(os.path.join(BASE_DIR, "assets", "coeff_header_mascot.png"))
+plan_header_uri = image_file_to_data_uri(os.path.join(BASE_DIR, "assets", "plan_header_mascot.png"))
+charts_header_uri = image_file_to_data_uri(os.path.join(BASE_DIR, "assets", "charts_header_mascot.png"))
+export_header_uri = image_file_to_data_uri(os.path.join(BASE_DIR, "assets", "export_header_mascot.png"))
+top_header_uri = coeff_header_uri or plan_header_uri or charts_header_uri or export_header_uri
+if top_header_uri:
+    top_header_html = """
+        <style>
+        .app-top-hero {
+            position: relative;
+            border: 1px solid #1D2A44;
+            border-radius: 14px;
+            overflow: hidden;
+            margin: 0.15rem 0 0.85rem 0;
+            min-height: 250px;
+            background: #0B1220;
+        }
+        .app-top-hero-bg {
+            position: absolute;
+            inset: 0;
+            background-image: url("__TOP_HEADER_URI__");
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: calc(100% - 20px) center;
+            opacity: 0.0;
+            transform: scale(1.0);
+            filter: none;
+            transition: opacity 220ms ease;
+        }
+        .app-top-hero-fade {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(90deg, rgba(8, 16, 30, 0.90) 0%, rgba(8, 16, 30, 0.48) 42%, rgba(8, 16, 30, 0.02) 72%, rgba(8, 16, 30, 0.00) 100%);
+        }
+        .app-top-hero-content {
+            position: relative;
+            z-index: 2;
+            padding: 14px 16px 14px 16px;
+        }
+        .app-top-hero-content .intro-card {
+            margin: 0.2rem 0 0.2rem 0;
+            padding: 12px 14px;
+            width: fit-content;
+            max-width: calc(100% - 360px);
+            border-radius: 12px;
+            border: 1px solid #3D8EF0;
+            border-left: 4px solid #00CDC5;
+            background: linear-gradient(180deg, rgba(0, 102, 224, 0.20) 0%, rgba(17, 26, 46, 0.84) 100%);
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.20);
+        }
+        @media (max-width: 1150px) {
+            .app-top-hero-content .intro-card {
+                width: 100%;
+            }
+            .app-top-hero-bg {
+                background-position: calc(100% - 12px) center;
+            }
+        }
+        .app-top-hero-content .intro-card p {
+            margin: 0 0 6px 0;
+            color: #EAF0FF;
+            line-height: 1.38;
+            font-size: clamp(0.93rem, 0.92vw, 1.06rem);
+            overflow-wrap: anywhere;
+        }
+        .app-top-hero-content .intro-card p.one-line {
+            white-space: normal;
+        }
+        .app-top-hero-content .intro-card p:last-child {
+            margin-bottom: 0;
+        }
+        @media (max-width: 1150px) {
+            .app-top-hero-content .intro-card p.one-line {
+                white-space: normal;
+            }
+        }
+        </style>
+        <div class="app-top-hero">
+            <div id="app-top-hero-bg" class="app-top-hero-bg"></div>
+            <div class="app-top-hero-fade"></div>
+            <div class="app-top-hero-content">
+                <h1 style="font-weight: 700; letter-spacing: 0.02em; margin: 0 0 6px 0; max-width: 70%;">
+                    Медиапланер <span style="color: #00CDC5; font-size: 1.25em;">E-promo</span>
+                </h1>
+                <div class="intro-card">
+                    <p><span style="font-weight: 800; color: #9EC5FF;">Что это:</span>
+                    инструмент для расчета медиаплана на выбранный период (от 1 до 12 месяцев) по типам рекламных кампаний.</p>
+                    <p class="one-line"><span style="font-weight: 800; color: #9EC5FF;">Зачем нужен:</span>
+                    чтобы упростить алгоритм расчета медиаплана, сократить время на первичный расчет и ускорить внесение последующих правок.</p>
+                </div>
+            </div>
+        </div>
+        """
+    st.markdown(
+        top_header_html.replace("__TOP_HEADER_URI__", top_header_uri),
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        """
+        <h1 style="font-weight: 700; letter-spacing: 0.02em;">
+            Медиапланер <span style="color: #00CDC5; font-size: 1.25em;">E-promo</span>
+        </h1>
+        """,
+        unsafe_allow_html=True,
+    )
 
-st.markdown(
-    """
-    <div style="
-        margin: 0.2rem 0 0.8rem 0;
-        padding: 12px 14px;
-        border-radius: 12px;
-        border: 1px solid #3D8EF0;
-        border-left: 4px solid #00CDC5;
-        background: linear-gradient(180deg, rgba(0, 102, 224, 0.18) 0%, rgba(17, 26, 46, 0.82) 100%);
-        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.20);
-    ">
-        <p style="margin: 0 0 6px 0; color: #EAF0FF; line-height: 1.45;">
-            <span style="font-weight: 800; color: #9EC5FF;">Что это:</span>
-            инструмент для расчета медиаплана на выбранный период (от 1 до 12 месяцев) по типам рекламных кампаний.
-        </p>
-        <p style="margin: 0; color: #EAF0FF; line-height: 1.45;">
-            <span style="font-weight: 800; color: #9EC5FF;">Зачем нужен:</span>
-            чтобы упростить алгоритм расчета медиаплана, сократить время на первичный расчет и ускорить внесение последующих правок.
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    st.markdown(
+        """
+        <div style="
+            margin: 0.2rem 0 0.8rem 0;
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1px solid #3D8EF0;
+            border-left: 4px solid #00CDC5;
+            background: linear-gradient(180deg, rgba(0, 102, 224, 0.18) 0%, rgba(17, 26, 46, 0.82) 100%);
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.20);
+        ">
+            <p style="margin: 0 0 6px 0; color: #EAF0FF; line-height: 1.45;">
+                <span style="font-weight: 800; color: #9EC5FF;">??? ???:</span>
+                ?????????? ??? ??????? ?????????? ?? ????????? ?????? (?? 1 ?? 12 ???????) ?? ????? ????????? ????????.
+            </p>
+            <p style="margin: 0; color: #EAF0FF; line-height: 1.45;">
+                <span style="font-weight: 800; color: #9EC5FF;">????? ?????:</span>
+                ????? ????????? ???????? ??????? ??????????, ????????? ????? ?? ????????? ?????? ? ???????? ???????? ??????????? ??????.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-# Всегда используем компактный режим таблиц.
 ui_compact_tables = True
 ui_editor_row_height = 28
 ui_table_row_px = 29
@@ -1312,6 +1545,115 @@ st.markdown(
 tab_coeffs, tab_plan, tab_charts, tab_export = st.tabs(
     ["Коэффициенты", "Медиаплан", "Диаграммы", "Export/Import"]
 )
+if top_header_uri:
+    header_tab_bg_map_json = json.dumps(
+        {
+            0: coeff_header_uri or "",
+            1: plan_header_uri or "",
+            2: charts_header_uri or "",
+            3: export_header_uri or "",
+        },
+        ensure_ascii=False,
+    )
+    components.html(
+        """
+        <script>
+        (function() {
+            const TAB_BG_MAP = __TAB_BG_MAP__;
+            const VISIBLE_OPACITY = "1.00";
+            const COEFF_TAB_INDEX = 0;
+            const PLAN_TAB_INDEX = 1;
+            const CHARTS_TAB_INDEX = 2;
+            const EXPORT_TAB_INDEX = 3;
+            const BASE_BG_POSITION = "calc(100% - 20px) center";
+            const COEFF_BG_POSITION = "calc(100% + 95px) calc(50% + 77px)";
+            const PLAN_BG_POSITION = "calc(100% + 120px) center";
+            const CHARTS_BG_SIZE = "47% auto";
+            const CHARTS_BG_POSITION = "calc(100% + 120px) calc(50% + 30px)";
+            const EXPORT_BG_SIZE = "24.8% auto";
+            const EXPORT_BG_POSITION = "calc(100% - 20px) calc(50% + 30px)";
+
+            const getTopTablist = (doc) => {
+                const tablists = Array.from(doc.querySelectorAll('[role="tablist"]'));
+                if (!tablists.length) return null;
+                return tablists
+                    .map(tl => ({ tl, top: tl.getBoundingClientRect().top }))
+                    .sort((a, b) => a.top - b.top)[0]?.tl || null;
+            };
+
+            const applyHeaderImage = () => {
+                const doc = window.parent.document;
+                const bg = doc.getElementById("app-top-hero-bg");
+                if (!bg) return false;
+                const topTablist = getTopTablist(doc);
+                if (!topTablist) return false;
+                const tabs = topTablist.querySelectorAll('button[role="tab"]');
+                if (!tabs || !tabs.length) return false;
+
+                let activeIdx = 0;
+                for (let i = 0; i < tabs.length; i++) {
+                    if (tabs[i].getAttribute("aria-selected") === "true") {
+                        activeIdx = i;
+                        break;
+                    }
+                }
+                const key = String(activeIdx);
+                const imgUrl = TAB_BG_MAP[key] || "";
+                bg.style.backgroundImage = imgUrl ? `url(${imgUrl})` : "";
+                if (activeIdx === COEFF_TAB_INDEX) {
+                    bg.style.backgroundSize = "52% auto";
+                    bg.style.backgroundPosition = COEFF_BG_POSITION;
+                } else if (activeIdx === PLAN_TAB_INDEX) {
+                    bg.style.backgroundSize = "58% auto";
+                    bg.style.backgroundPosition = PLAN_BG_POSITION;
+                } else if (activeIdx === CHARTS_TAB_INDEX) {
+                    bg.style.backgroundSize = CHARTS_BG_SIZE;
+                    bg.style.backgroundPosition = CHARTS_BG_POSITION;
+                } else if (activeIdx === EXPORT_TAB_INDEX) {
+                    bg.style.backgroundSize = EXPORT_BG_SIZE;
+                    bg.style.backgroundPosition = EXPORT_BG_POSITION;
+                } else {
+                    bg.style.backgroundSize = "58% auto";
+                    bg.style.backgroundPosition = BASE_BG_POSITION;
+                }
+                bg.style.opacity = imgUrl ? VISIBLE_OPACITY : "0.0";
+                return true;
+            };
+
+            let attempts = 0;
+            const init = () => {
+                applyHeaderImage();
+                attempts += 1;
+                if (attempts < 30) setTimeout(init, 120);
+            };
+            init();
+
+            const topTablist = getTopTablist(window.parent.document);
+            if (topTablist) {
+                const obs = new MutationObserver(() => applyHeaderImage());
+                obs.observe(topTablist, {
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ["aria-selected", "class"],
+                });
+            }
+        })();
+        </script>
+        """.replace("__TAB_BG_MAP__", header_tab_bg_map_json),
+        height=0,
+        width=0,
+    )
+
+# Быстрый импорт доступен всегда (даже до первого расчета на вкладке "Медиаплан").
+with st.sidebar:
+    st.markdown("### Быстрый импорт проекта")
+    st.caption("Загрузите JSON проекта сразу после запуска приложения.")
+    uploaded_project_quick = st.file_uploader(
+        "Импорт проекта (JSON)",
+        type=["json"],
+        key="upload_project_json_quick",
+    )
+    queue_project_import_from_upload(uploaded_project_quick, "quick_sidebar")
 # ====================================================================
 #                        ТАБ «КОЭФФИЦИЕНТЫ»
 # ====================================================================
@@ -1356,16 +1698,16 @@ with tab_coeffs:
         unsafe_allow_html=True,
     )
     st.caption(
-        "Источники данных: для «Спрос» — Wordstat; для «AOV» — фактический средний чек из аналитики; "
+        "сточники данных: для «Спрос» — Wordstat; для «AOV» — фактический средний чек из аналитики; "
         "для «Медийных хвостов» — обратитесь к специалистам по медийной рекламе для расчета влияния."
     )
 
-    # ---------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------------
+    # ---------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦ ----------------
 
     def generate_months_list(start_month: int, start_year: int, count: int = 24):
         month_names = [
-            "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+            "Январь", "Февраль", "Март", "Апрель", "Май", "юнь",
+            "юль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
         ]
         months = []
         current_month = start_month
@@ -1395,7 +1737,7 @@ with tab_coeffs:
         """
         month_names_map = {
             1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
-            5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+            5: "Май", 6: "юнь", 7: "юль", 8: "Август",
             9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
         }
 
@@ -1448,7 +1790,7 @@ with tab_coeffs:
         """
         month_names_map = {
             1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
-            5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+            5: "Май", 6: "юнь", 7: "юль", 8: "Август",
             9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
         }
 
@@ -1478,12 +1820,12 @@ with tab_coeffs:
 
         return pd.DataFrame(rows)
 
-    # ---------------- ИНИЦИАЛИЗАЦИЯ СОСТОЯНИЯ ----------------
+    # ---------------- НЦАЛЗАЦЯ СОСТОЯНЯ ----------------
 
     if "coeff_sets" not in st.session_state:
         st.session_state["coeff_sets"] = []  # список наборов
 
-    # ---------------- ДОБАВЛЕНИЕ НОВОГО НАБОРА ----------------
+    # ---------------- ДОБАВЛЕНЕ НОВОГО НАБОРА ----------------
 
     col_add_set, col_help = st.columns([2, 3])
     with col_add_set:
@@ -1505,7 +1847,7 @@ with tab_coeffs:
     with col_help:
         st.empty()
 
-    # ---------------- СПИСОК НАБОРОВ ----------------
+    # ---------------- СПСОК НАБОРОВ ----------------
 
     if not st.session_state["coeff_sets"]:
         st.info("Пока нет ни одного набора коэффициентов. Нажмите «➕ Добавить новый набор коэффициентов».")
@@ -1554,8 +1896,8 @@ with tab_coeffs:
                         "Начальный месяц периода:",
                         options=list(range(1, 13)),
                         format_func=lambda x: [
-                            "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-                            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+                            "Январь", "Февраль", "Март", "Апрель", "Май", "юнь",
+                            "юль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
                         ][x - 1],
                         index=cs["start_month"] - 1,
                         key=f"cs_month_{set_id}",
@@ -1570,10 +1912,10 @@ with tab_coeffs:
                         key=f"cs_year_{set_id}",
                     )
 
-                # ---- 4. Интерфейс в зависимости от типа набора ----
+                # ---- 4. нтерфейс в зависимости от типа набора ----
 
                 if cs["type"] == "Спрос (по запросам)":
-                    # ===== РЕЖИМ СПРОС (ПО ЗАПРОСАМ) =====
+                    # ===== РЕЖМ СПРОС (ПО ЗАПРОСАМ) =====
                     st.markdown("**Поисковые запросы:**")
 
                     if not cs.get("queries"):
@@ -1645,7 +1987,7 @@ with tab_coeffs:
                                 st.success("Коэффициенты рассчитаны!")
 
                 elif cs["type"] == "AOV (средний чек)":
-                    # ===== РЕЖИМ AOV (СРЕДНИЙ ЧЕК) =====
+                    # ===== РЕЖМ AOV (СРЕДНЙ ЧЕК) =====
                     st.markdown("**Данные по среднему чеку (AOV):**")
                     st.caption("Для каждого из 24 месяцев укажите средний чек (AOV).")
 
@@ -1685,13 +2027,13 @@ with tab_coeffs:
                                 cs["result"] = df_coeffs
                                 st.success("Коэффициенты AOV рассчитаны!")
                         with aov_right:
-                            st.markdown("**Итоговые коэффициенты AOV**")
+                            st.markdown("**тоговые коэффициенты AOV**")
                             if cs.get("result") is not None:
                                 st.dataframe(cs["result"], use_container_width=True, height=420)
                             else:
                                 st.info("После расчета здесь появится итоговая таблица коэффициентов.")
                 elif cs["type"] == "Кастомный набор":
-                    # ===== РЕЖИМ КАСТОМНЫЙ НАБОР =====
+                    # ===== РЕЖМ КАСТОМНЫЙ НАБОР =====
                     st.markdown("**Кастомные коэффициенты на 12 месяцев:**")
                     st.caption(
                         "Заполните коэффициенты вручную. Этот набор можно использовать и для спроса, и для AOV."
@@ -1699,7 +2041,7 @@ with tab_coeffs:
 
                     month_names_map = {
                         1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
-                        5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+                        5: "Май", 6: "юнь", 7: "юль", 8: "Август",
                         9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
                     }
 
@@ -1748,7 +2090,7 @@ with tab_coeffs:
                         else:
                             st.caption("Вносите значения слева и применяйте набор кнопкой выше.")
                 else:
-                    # ===== РЕЖИМ МЕДИЙНЫЕ ХВОСТЫ =====
+                    # ===== РЕЖМ МЕДЙНЫЕ ХВОСТЫ =====
                     st.markdown("**Медийные хвосты (коэффициенты показов на 12 месяцев):**")
                     st.caption(
                         "Этот набор накладывается на спрос и влияет только на показы "
@@ -1757,7 +2099,7 @@ with tab_coeffs:
 
                     month_names_map = {
                         1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
-                        5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+                        5: "Май", 6: "юнь", 7: "юль", 8: "Август",
                         9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
                     }
 
@@ -1809,7 +2151,7 @@ with tab_coeffs:
                 if cs.get("result") is not None:
                     cs_type_norm = normalize_coeff_set_type(cs.get("type"))
                     if cs_type_norm == "Спрос (по запросам)":
-                        st.markdown("### Итоговые коэффициенты")
+                        st.markdown("### тоговые коэффициенты")
                         st.dataframe(cs["result"], use_container_width=True)
 
                     buf = io.BytesIO()
@@ -1828,7 +2170,7 @@ with tab_coeffs:
                     )
     render_bottom_tab_switcher("Коэффициенты", "coeffs")
 # ====================================================================
-#                           ТАБ «МЕДИАПЛАН»
+#                           ТАБ «МЕДАПЛАН»
 # ====================================================================
 
 with tab_plan:
@@ -1893,8 +2235,8 @@ with tab_plan:
         3: "Март",
         4: "Апрель",
         5: "Май",
-        6: "Июнь",
-        7: "Июль",
+        6: "юнь",
+        7: "юль",
         8: "Август",
         9: "Сентябрь",
         10: "Октябрь",
@@ -2335,7 +2677,7 @@ with tab_plan:
             if vat_ak_dirty:
                 st.success("Настройки НДС и АК применены.")
             else:
-                st.info("Изменений нет: текущие настройки уже применены.")
+                st.info("зменений нет: текущие настройки уже применены.")
         st.caption(
             "CPC всегда считается от бюджета без НДС. При выключенном режиме НДС расчеты возвращаются к старой логике."
         )
@@ -2981,7 +3323,7 @@ with tab_plan:
         st.session_state["mp_ref_base_by_campaign"] = base_by_campaign
 
         total_row_raw = {
-            "campaign_type": "Итого",
+            "campaign_type": "того",
             "segment": "ALL",
             "system": "",
             "format": "",
@@ -3033,7 +3375,7 @@ with tab_plan:
                 seg_drr = (seg_budget_basis / seg_rev * 100) if seg_rev > 0 else 0
                 segment_total_rows.append(
                     {
-                        "campaign_type": f"Итого {seg_name}",
+                        "campaign_type": f"того {seg_name}",
                         "segment": seg_name,
                         "system": "",
                         "format": "",
@@ -3162,10 +3504,10 @@ with tab_plan:
                 DISPLAY_COL_RENAME["campaign_type"],
                 DISPLAY_COL_RENAME["segment"],
             )
-        # Принудительно фиксируем значения в последней строке Итого (после всех преобразований).
+        # Принудительно фиксируем значения в последней строке того (после всех преобразований).
         if len(df_base_show) > 0:
             li = len(df_base_show) - 1
-            df_base_show.at[li, DISPLAY_COL_RENAME["campaign_type"]] = "Итого"
+            df_base_show.at[li, DISPLAY_COL_RENAME["campaign_type"]] = "того"
             if DISPLAY_COL_RENAME.get("segment") in df_base_show.columns:
                 df_base_show.at[li, DISPLAY_COL_RENAME["segment"]] = "ALL"
             df_base_show.at[li, DISPLAY_COL_RENAME["system"]] = ""
@@ -3206,11 +3548,11 @@ with tab_plan:
             style = [""] * len(row)
             camp_col = DISPLAY_COL_RENAME.get("campaign_type", "Название кампании")
             camp_val = str(row.get(camp_col, ""))
-            if camp_val == "Итого":
+            if camp_val == "того":
                 style = [
                     f"background-color: #00CDC5; color: #081521; font-weight: 700; border-top: 2px solid {THEME_BORDER};"
                 ] * len(row)
-            elif camp_val.startswith("Итого "):
+            elif camp_val.startswith("того "):
                 style = [
                     f"background-color: #2C6E75; color: #DDEAF0; font-weight: 650; border-top: 1px solid {THEME_BORDER};"
                 ] * len(row)
@@ -3532,7 +3874,7 @@ with tab_plan:
                         total_drr = (total_budget_basis / total_rev * 100) if total_rev > 0 else 0
 
                         total_row_month = {
-                            "campaign_type": "Итого",
+                            "campaign_type": "того",
                             "segment": "ALL",
                             "system": "",
                             "format": "",
@@ -3584,7 +3926,7 @@ with tab_plan:
                                 seg_roas = (seg_rev / seg_budget_basis) if seg_budget_basis > 0 else 0
                                 seg_drr = (seg_budget_basis / seg_rev * 100) if seg_rev > 0 else 0
                                 seg_row = {
-                                    "campaign_type": f"Итого {seg_name}",
+                                    "campaign_type": f"того {seg_name}",
                                     "segment": seg_name,
                                     "system": "",
                                     "format": "",
@@ -3754,11 +4096,11 @@ with tab_plan:
                             style = [""] * len(row)
                             camp_col = DISPLAY_COL_RENAME.get("campaign_type", "Название кампании")
                             camp_val = str(row.get(camp_col, ""))
-                            if camp_val == "Итого":
+                            if camp_val == "того":
                                 style = [
                                     f"background-color: #00CDC5; color: #081521; font-weight: 700; border-top: 2px solid {THEME_BORDER};"
                                 ] * len(row)
-                            elif camp_val.startswith("Итого "):
+                            elif camp_val.startswith("того "):
                                 style = [
                                     f"background-color: #2C6E75; color: #DDEAF0; font-weight: 650; border-top: 1px solid {THEME_BORDER};"
                                 ] * len(row)
@@ -3776,7 +4118,7 @@ with tab_plan:
                     else:
                         st.info("Нет данных для этого месяца.")
 
-    # ---------- 4. Итоги по выбранным месяцам (TOTAL) ----------
+    # ---------- 4. тоги по выбранным месяцам (TOTAL) ----------
 
     if all_months_results:
         df_all = pd.concat(all_months_results, ignore_index=True)
@@ -3873,6 +4215,12 @@ with tab_plan:
     with st.sidebar:
         st.markdown("---")
         st.markdown("### Быстрая сверка")
+        # Import compatibility: old state could store a legacy mode value.
+        if st.session_state.get("mp_ref_mode") == "Включено":
+            st.session_state["mp_ref_mode"] = "Средний месяц"
+        # If references are missing after import/rerun, rebuild them from base campaigns.
+        if not st.session_state.get("mp_ref_base"):
+            _bootstrap_reference_from_campaigns(st.session_state.get("campaigns_df"))
         if is_diy_preset:
             st.selectbox(
                 "Сегмент в расчете",
@@ -3889,9 +4237,12 @@ with tab_plan:
             set(st.session_state.get("mp_ref_base_by_campaign", {}).keys())
             | set(st.session_state.get("mp_ref_total_by_campaign", {}).keys())
         )
+        valid_ref_campaigns = ["Все типы РК"] + all_ref_campaigns
+        if st.session_state.get("mp_ref_campaign") not in valid_ref_campaigns:
+            st.session_state["mp_ref_campaign"] = "Все типы РК"
         ref_campaign = st.selectbox(
             "Тип РК",
-            options=["Все типы РК"] + all_ref_campaigns,
+            options=valid_ref_campaigns,
             key="mp_ref_campaign",
         )
         ref_src = None
@@ -3906,13 +4257,21 @@ with tab_plan:
             else:
                 ref_src = st.session_state.get("mp_ref_total_by_campaign", {}).get(ref_campaign)
 
+        # Fallback: right after import TOTAL may be unavailable until full plan calc.
+        # Show base reference instead of empty block.
+        if ref_src is None and ref_mode == "TOTAL выбранных месяцев":
+            if ref_campaign == "Все типы РК":
+                ref_src = st.session_state.get("mp_ref_base")
+            else:
+                ref_src = st.session_state.get("mp_ref_base_by_campaign", {}).get(ref_campaign)
+
         if ref_mode != "Выключено":
             if ref_src:
                 st.dataframe(_build_ref_df(ref_src), use_container_width=True, hide_index=True)
             else:
                 st.caption("Нет данных для выбранного режима сверки.")
 
-    with st.expander("4. Итоги по выбранным месяцам (TOTAL)", expanded=True):
+    with st.expander("4. тоги по выбранным месяцам (TOTAL)", expanded=True):
         if df_all.empty:
             st.info("Нет данных для итогов. Заполните медиаплан по месяцам.")
         else:
@@ -4023,7 +4382,7 @@ with tab_plan:
                         seg_budget_basis = seg_cost_with_vat if use_vat_budget_metrics else seg_cost
                     seg_row = {
                         "month_num": 998,
-                        "month_name": f"Итого {seg_name}",
+                        "month_name": f"того {seg_name}",
                         "impressions": float(seg_df["impressions"].sum()),
                         "clicks": float(seg_df["clicks"].sum()),
                         "conversions": float(seg_df["conversions"].sum()),
@@ -4084,7 +4443,7 @@ with tab_plan:
 
             def _style_metric_col(col: pd.Series) -> pd.Series:
                 styles = pd.Series([""] * len(col), index=col.index)
-                mask = ~agg_show["Месяц"].astype(str).str.startswith("Итого")
+                mask = ~agg_show["Месяц"].astype(str).str.startswith("того")
                 mask &= agg_show["Месяц"] != "TOTAL"
                 vals = pd.to_numeric(col[mask], errors="coerce").dropna()
                 if vals.empty:
@@ -4108,7 +4467,7 @@ with tab_plan:
                     style = [
                         f"background-color: #00CDC5; color: #081521; font-weight: 700; border-top: 2px solid {THEME_BORDER};"
                     ] * len(row)
-                elif month_val.startswith("Итого "):
+                elif month_val.startswith("того "):
                     style = [
                         f"background-color: #2C6E75; color: #DDEAF0; font-weight: 650; border-top: 1px solid {THEME_BORDER};"
                     ] * len(row)
@@ -4142,7 +4501,7 @@ with tab_plan:
 
     render_bottom_tab_switcher("Медиаплан", "plan")
 # ====================================================================
-#                           ТАБ «ДИАГРАММЫ»
+#                           ТАБ «ДАГРАММЫ»
 # ====================================================================
 
 with tab_charts:
@@ -4201,8 +4560,8 @@ with tab_charts:
             3: "Март",
             4: "Апрель",
             5: "Май",
-            6: "Июнь",
-            7: "Июль",
+            6: "юнь",
+            7: "юль",
             8: "Август",
             9: "Сентябрь",
             10: "Октябрь",
@@ -4708,6 +5067,98 @@ with tab_charts:
                             )
                             st.plotly_chart(fig_rev, use_container_width=True)
 
+                        if is_diy_preset and "segment" in df_sel.columns:
+                            seg_work = df_sel.copy()
+                            seg_work["segment_norm"] = (
+                                seg_work["segment"].astype(str).str.upper().str.strip()
+                            )
+                            seg_work = seg_work[seg_work["segment_norm"].isin(["B2B", "B2C"])]
+
+                            if not seg_work.empty:
+                                if use_ak_budget_metrics:
+                                    if use_vat_budget_metrics:
+                                        seg_work["budget_basis"] = seg_work["cost_with_vat_ak"]
+                                    else:
+                                        seg_work["budget_basis"] = seg_work["cost"] + seg_work["ak_cost_wo_vat"]
+                                else:
+                                    seg_work["budget_basis"] = (
+                                        seg_work["cost_with_vat"] if use_vat_budget_metrics else seg_work["cost"]
+                                    )
+
+                                agg_seg = (
+                                    seg_work.groupby("segment_norm", as_index=False)
+                                    .agg(
+                                        budget_basis=("budget_basis", "sum"),
+                                        revenue=("revenue", "sum"),
+                                        orders=("conversions", "sum"),
+                                    )
+                                )
+                                agg_seg["segment_norm"] = pd.Categorical(
+                                    agg_seg["segment_norm"], categories=["B2C", "B2B"], ordered=True
+                                )
+                                agg_seg = agg_seg.sort_values("segment_norm")
+
+                                ui_section_title("DIY: распределение между B2B и B2C")
+                                seg_palette = ["#3D8EF0", "#00CDC5"]
+                                seg_pie1, seg_pie2, seg_pie3 = st.columns(3)
+
+                                with seg_pie1:
+                                    fig_seg_budget = px.pie(
+                                        agg_seg,
+                                        names="segment_norm",
+                                        values="budget_basis",
+                                        title="Доля бюджета между B2B и B2C",
+                                        color_discrete_sequence=seg_palette,
+                                    )
+                                    fig_seg_budget.update_traces(textposition="inside", textinfo="percent+label")
+                                    fig_seg_budget.update_layout(
+                                        height=520,
+                                        margin=dict(l=12, r=12, t=64, b=12),
+                                        showlegend=False,
+                                        paper_bgcolor="rgba(0,0,0,0)",
+                                        plot_bgcolor="rgba(0,0,0,0)",
+                                        font=dict(color=THEME_PLOT_TEXT),
+                                    )
+                                    st.plotly_chart(fig_seg_budget, use_container_width=True)
+
+                                with seg_pie2:
+                                    fig_seg_rev = px.pie(
+                                        agg_seg,
+                                        names="segment_norm",
+                                        values="revenue",
+                                        title="Доля выручки между B2B и B2C",
+                                        color_discrete_sequence=seg_palette,
+                                    )
+                                    fig_seg_rev.update_traces(textposition="inside", textinfo="percent+label")
+                                    fig_seg_rev.update_layout(
+                                        height=520,
+                                        margin=dict(l=12, r=12, t=64, b=12),
+                                        showlegend=False,
+                                        paper_bgcolor="rgba(0,0,0,0)",
+                                        plot_bgcolor="rgba(0,0,0,0)",
+                                        font=dict(color=THEME_PLOT_TEXT),
+                                    )
+                                    st.plotly_chart(fig_seg_rev, use_container_width=True)
+
+                                with seg_pie3:
+                                    fig_seg_orders = px.pie(
+                                        agg_seg,
+                                        names="segment_norm",
+                                        values="orders",
+                                        title="Доля заказов между B2B и B2C",
+                                        color_discrete_sequence=seg_palette,
+                                    )
+                                    fig_seg_orders.update_traces(textposition="inside", textinfo="percent+label")
+                                    fig_seg_orders.update_layout(
+                                        height=520,
+                                        margin=dict(l=12, r=12, t=64, b=12),
+                                        showlegend=False,
+                                        paper_bgcolor="rgba(0,0,0,0)",
+                                        plot_bgcolor="rgba(0,0,0,0)",
+                                        font=dict(color=THEME_PLOT_TEXT),
+                                    )
+                                    st.plotly_chart(fig_seg_orders, use_container_width=True)
+
     render_bottom_tab_switcher("Диаграммы", "charts")
 
 # ====================================================================
@@ -4749,8 +5200,8 @@ with tab_export:
             3: "Март",
             4: "Апрель",
             5: "Май",
-            6: "Июнь",
-            7: "Июль",
+            6: "юнь",
+            7: "юль",
             8: "Август",
             9: "Сентябрь",
             10: "Октябрь",
@@ -4845,10 +5296,16 @@ with tab_export:
                     agg_month["ctr_pct"] = np.where(agg_month["impressions"] > 0, agg_month["clicks"] / agg_month["impressions"] * 100.0, 0.0)
                     agg_month["cpc"] = np.where(agg_month["clicks"] > 0, agg_month["cost"] / agg_month["clicks"], 0.0)
                     agg_month["cr_pct"] = np.where(agg_month["clicks"] > 0, agg_month["conversions"] / agg_month["clicks"] * 100.0, 0.0)
-                    agg_month["cpm"] = np.where(agg_month["impressions"] > 0, agg_month["cost_with_vat_ak"] / (agg_month["impressions"] / 1000.0), 0.0)
-                    agg_month["cpo"] = np.where(agg_month["conversions"] > 0, agg_month["cost_with_vat_ak"] / agg_month["conversions"], 0.0)
-                    agg_month["roas_pct"] = np.where(agg_month["cost_with_vat_ak"] > 0, agg_month["revenue"] / agg_month["cost_with_vat_ak"] * 100.0, 0.0)
-                    agg_month["drr_pct"] = np.where(agg_month["revenue"] > 0, agg_month["cost_with_vat_ak"] / agg_month["revenue"] * 100.0, 0.0)
+                    export_use_vat = bool(st.session_state.get("use_vat_budget_metrics", True))
+                    export_use_ak = bool(st.session_state.get("use_ak_budget_metrics", False))
+                    if export_use_ak:
+                        budget_series = agg_month["cost_with_vat_ak"] if export_use_vat else (agg_month["cost"] + agg_month["ak_cost_wo_vat"])
+                    else:
+                        budget_series = agg_month["cost_with_vat"] if export_use_vat else agg_month["cost"]
+                    agg_month["cpm"] = np.where(agg_month["impressions"] > 0, budget_series / (agg_month["impressions"] / 1000.0), 0.0)
+                    agg_month["cpo"] = np.where(agg_month["conversions"] > 0, budget_series / agg_month["conversions"], 0.0)
+                    agg_month["roas_pct"] = np.where(budget_series > 0, agg_month["revenue"] / budget_series * 100.0, 0.0)
+                    agg_month["drr_pct"] = np.where(agg_month["revenue"] > 0, budget_series / agg_month["revenue"] * 100.0, 0.0)
                     agg_month = agg_month.rename(
                         columns={
                             "month_num": "Месяц №",
@@ -4957,13 +5414,7 @@ with tab_export:
         key="upload_project_json",
         help="После импорта страница перезагрузится и восстановит наборы коэффициентов, связки и настройки.",
     )
-    if uploaded_project is not None:
-        try:
-            imported_payload = json.loads(uploaded_project.getvalue().decode("utf-8"))
-            st.session_state["_pending_project_import_payload"] = imported_payload
-            st.rerun()
-        except Exception as e:
-            st.error(f"Не удалось прочитать файл проекта: {e}")
+    queue_project_import_from_upload(uploaded_project, "export_tab")
 
     render_bottom_tab_switcher("Export/Import", "export")
 

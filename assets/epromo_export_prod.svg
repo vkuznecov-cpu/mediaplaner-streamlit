@@ -1,0 +1,172 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" fill="none">
+  <defs>
+    <linearGradient id="armBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1A7CFF"/>
+      <stop offset="100%" stop-color="#0057D8"/>
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#30E7DD"/>
+      <stop offset="100%" stop-color="#00CDC5"/>
+    </linearGradient>
+    <linearGradient id="purpleGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#B77CFF"/>
+      <stop offset="100%" stop-color="#9747FF"/>
+    </linearGradient>
+    <linearGradient id="orangeGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFAF57"/>
+      <stop offset="100%" stop-color="#FF6333"/>
+    </linearGradient>
+    <linearGradient id="boxFront" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFB05A"/>
+      <stop offset="100%" stop-color="#F28A36"/>
+    </linearGradient>
+    <linearGradient id="boxSide" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#DD7A2E"/>
+      <stop offset="100%" stop-color="#B95A22"/>
+    </linearGradient>
+    <linearGradient id="faceGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFFDF8"/>
+      <stop offset="100%" stop-color="#ECEAE5"/>
+    </linearGradient>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#071225" flood-opacity="0.20"/>
+    </filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#071225" flood-opacity="0.16"/>
+    </filter>
+    <style>
+      .title { font: 800 78px Inter, Arial, sans-serif; fill: #FFFFFF; letter-spacing: -1px; }
+      .label { font: 700 34px Inter, Arial, sans-serif; fill: #FFFFFF; }
+      .file { font: 800 44px Inter, Arial, sans-serif; fill: #FFFFFF; }
+      .boxtext { font: 800 72px Inter, Arial, sans-serif; fill: #FFF8EE; letter-spacing: -1px; }
+      .minor { font: 700 18px Inter, Arial, sans-serif; fill: #D9E7FF; opacity: 0.75; }
+    </style>
+  </defs>
+
+  <!-- background transparent -->
+  <!-- arrow -->
+  <g filter="url(#soft)" transform="translate(765 152)">
+    <path d="M88 0 C165 38 213 94 223 176 C231 236 219 295 176 353"
+          stroke="url(#orangeGrad)" stroke-width="36" stroke-linecap="round" fill="none"/>
+    <path d="M208 18 L259 22 L245 72" stroke="url(#orangeGrad)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </g>
+
+  <!-- robot left arm behind -->
+  <g transform="translate(220 516) rotate(-8)" filter="url(#soft)">
+    <rect x="0" y="0" width="170" height="62" rx="31" fill="url(#armBlue)"/>
+    <rect x="128" y="5" width="58" height="52" rx="20" fill="url(#cyanGrad)"/>
+  </g>
+
+  <!-- robot body -->
+  <g filter="url(#shadow)">
+    <ellipse cx="387" cy="794" rx="155" ry="24" fill="#071225" opacity="0.12"/>
+    <rect x="214" y="238" width="350" height="355" rx="110" fill="url(#armBlue)"/>
+    <rect x="236" y="258" width="306" height="316" rx="96" fill="#1574FA"/>
+    <rect x="232" y="172" width="316" height="228" rx="88" fill="url(#armBlue)"/>
+    <rect x="252" y="191" width="276" height="189" rx="74" fill="#2688FF"/>
+    <rect x="286" y="224" width="208" height="143" rx="42" fill="url(#faceGrad)"/>
+
+    <!-- eyes -->
+    <ellipse cx="356" cy="293" rx="36" ry="42" fill="#0B1730"/>
+    <ellipse cx="424" cy="293" rx="36" ry="42" fill="#0B1730"/>
+    <ellipse cx="346" cy="278" rx="12" ry="14" fill="#FFFFFF"/>
+    <ellipse cx="414" cy="278" rx="12" ry="14" fill="#FFFFFF"/>
+    <path d="M367 335 C384 349 397 349 413 335" stroke="#0B1730" stroke-width="9" stroke-linecap="round"/>
+
+    <!-- torso -->
+    <rect x="314" y="496" width="150" height="20" rx="10" fill="#0963DF" opacity="0.6"/>
+
+    <!-- legs -->
+    <g transform="translate(270 575)">
+      <path d="M42 0 L94 0 L78 175 C76 197 58 214 36 214 L28 214 C8 214 -6 196 -3 177 L18 44 C22 19 29 0 42 0 Z" fill="url(#armBlue)"/>
+      <rect x="0" y="201" width="108" height="45" rx="22" fill="#0C5FE0"/>
+    </g>
+    <g transform="translate(430 575)">
+      <path d="M18 0 L68 0 C83 0 92 10 96 27 L118 174 C121 195 106 214 85 214 L76 214 C54 214 36 197 34 175 L18 0 Z" fill="url(#armBlue)"/>
+      <rect x="26" y="201" width="108" height="45" rx="22" fill="#0C5FE0"/>
+    </g>
+  </g>
+
+  <!-- robot right arm holding box -->
+  <g filter="url(#shadow)">
+    <g transform="translate(432 462) rotate(10)">
+      <rect x="0" y="0" width="182" height="72" rx="36" fill="url(#armBlue)"/>
+      <rect x="138" y="10" width="72" height="54" rx="22" fill="#0C5FE0"/>
+    </g>
+    <g transform="translate(188 470) rotate(14)">
+      <rect x="0" y="0" width="164" height="70" rx="35" fill="url(#armBlue)"/>
+      <rect x="118" y="10" width="76" height="52" rx="22" fill="#0C5FE0"/>
+      <!-- wrist badge -->
+      <rect x="72" y="10" width="40" height="48" rx="14" fill="url(#orangeGrad)"/>
+      <rect x="80" y="18" width="24" height="30" rx="8" fill="#5C7DFF" opacity="0.85"/>
+    </g>
+  </g>
+
+  <!-- box -->
+  <g filter="url(#shadow)" transform="translate(468 470)">
+    <path d="M0 42 C0 18 18 0 42 0 H250 C274 0 292 18 292 42 V254 C292 278 274 296 250 296 H42 C18 296 0 278 0 254 Z" fill="url(#boxFront)"/>
+    <path d="M250 0 H278 C302 0 320 18 320 42 V236 C320 255 309 272 292 281 V42 C292 18 274 0 250 0 Z" fill="url(#boxSide)"/>
+    <path d="M28 0 H120 L165 42 H72 C48 42 30 24 28 0 Z" fill="#F8C27D"/>
+    <path d="M170 42 L121 0 H198 L247 42 Z" fill="#FFE0B3"/>
+    <path d="M204 0 H252 C274 0 289 12 292 32 L248 42 L204 0 Z" fill="#F6C98C"/>
+    <text x="58" y="189" class="boxtext">Export</text>
+    <ellipse cx="222" cy="242" rx="34" ry="14" fill="#D26D26" opacity="0.35"/>
+  </g>
+
+  <!-- papers -->
+  <g filter="url(#soft)">
+    <g transform="translate(520 418) rotate(3)">
+      <rect x="0" y="0" width="96" height="136" rx="16" fill="#F7FBFF"/>
+      <path d="M72 0 H96 V26 Z" fill="#DBE8F8"/>
+      <rect x="18" y="28" width="42" height="14" rx="7" fill="#00CDC5"/>
+      <rect x="18" y="56" width="58" height="8" rx="4" fill="#C1D4EF"/>
+      <rect x="18" y="74" width="62" height="8" rx="4" fill="#C1D4EF"/>
+      <rect x="18" y="92" width="48" height="8" rx="4" fill="#C1D4EF"/>
+    </g>
+    <g transform="translate(585 432) rotate(-2)">
+      <rect x="0" y="0" width="100" height="142" rx="16" fill="#F7FBFF"/>
+      <path d="M76 0 H100 V28 Z" fill="#DBE8F8"/>
+      <rect x="18" y="26" width="46" height="14" rx="7" fill="#9747FF"/>
+      <rect x="18" y="54" width="66" height="8" rx="4" fill="#C1D4EF"/>
+      <rect x="18" y="72" width="56" height="8" rx="4" fill="#C1D4EF"/>
+      <rect x="18" y="90" width="46" height="8" rx="4" fill="#C1D4EF"/>
+      <rect x="18" y="108" width="64" height="8" rx="4" fill="#C1D4EF"/>
+    </g>
+    <g transform="translate(650 446) rotate(5)">
+      <rect x="0" y="0" width="84" height="124" rx="16" fill="#F7FBFF"/>
+      <path d="M60 0 H84 V24 Z" fill="#DBE8F8"/>
+      <rect x="16" y="24" width="40" height="12" rx="6" fill="#FF6333"/>
+      <rect x="16" y="48" width="50" height="8" rx="4" fill="#C1D4EF"/>
+      <rect x="16" y="66" width="44" height="8" rx="4" fill="#C1D4EF"/>
+    </g>
+  </g>
+
+  <!-- floating files -->
+  <g filter="url(#soft)">
+    <g transform="translate(915 198)">
+      <rect x="0" y="0" width="156" height="184" rx="26" fill="url(#cyanGrad)"/>
+      <path d="M108 0 H156 V50 L108 0 Z" fill="#DDF7F5"/>
+      <text x="34" y="116" class="file">XLS</text>
+    </g>
+    <g transform="translate(934 430) rotate(4)">
+      <rect x="0" y="0" width="146" height="172" rx="26" fill="url(#purpleGrad)"/>
+      <path d="M100 0 H146 V46 L100 0 Z" fill="#E7D6FF"/>
+      <text x="20" y="106" class="file">JSON</text>
+    </g>
+    <g transform="translate(900 642) rotate(-5)">
+      <rect x="0" y="0" width="154" height="180" rx="26" fill="url(#armBlue)"/>
+      <path d="M108 0 H154 V48 L108 0 Z" fill="#D8E9FF"/>
+      <text x="28" y="112" class="file">XSLS</text>
+    </g>
+  </g>
+
+  <!-- sparkles -->
+  <g opacity="0.95">
+    <circle cx="104" cy="292" r="7" fill="#FFE49C"/>
+    <path d="M104 271 V283 M104 301 V313 M83 292 H95 M113 292 H125" stroke="#FFE49C" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="845" cy="117" r="8" fill="#5AA2FF" opacity="0.65"/>
+    <circle cx="992" cy="138" r="4" fill="#9CC7FF" opacity="0.8"/>
+    <circle cx="858" cy="688" r="8" fill="#00CDC5" opacity="0.7"/>
+    <circle cx="206" cy="710" r="9" fill="#9747FF" opacity="0.5"/>
+  </g>
+</svg>
