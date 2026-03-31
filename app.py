@@ -6,6 +6,7 @@ import json
 import os
 import hashlib
 import base64
+import zipfile
 from dataclasses import dataclass
 from io import BytesIO
 from openpyxl import load_workbook
@@ -865,8 +866,8 @@ def reorder_rows_with_segment_subtotals(
 
     work = df_show.copy()
     campaign_vals = work[campaign_col].astype(str)
-    is_total_any = campaign_vals.str.startswith("того")
-    is_total_grand = campaign_vals.eq("того")
+    is_total_any = campaign_vals.str.startswith("Итого")
+    is_total_grand = campaign_vals.eq("Итого")
     is_total_segment = is_total_any & ~is_total_grand
     is_campaign = ~is_total_any
 
@@ -883,7 +884,7 @@ def reorder_rows_with_segment_subtotals(
         if not seg_campaigns.empty:
             ordered_parts.append(seg_campaigns)
             used_idx.update(seg_campaigns.index.tolist())
-            seg_total = work[is_total_segment & (campaign_vals == f"того {seg}")]
+            seg_total = work[is_total_segment & (campaign_vals == f"Итого {seg}")]
             if not seg_total.empty:
                 ordered_parts.append(seg_total)
                 used_idx.update(seg_total.index.tolist())
@@ -1706,8 +1707,8 @@ with tab_coeffs:
 
     def generate_months_list(start_month: int, start_year: int, count: int = 24):
         month_names = [
-            "Январь", "Февраль", "Март", "Апрель", "Май", "юнь",
-            "юль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+            "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
         ]
         months = []
         current_month = start_month
@@ -1737,7 +1738,7 @@ with tab_coeffs:
         """
         month_names_map = {
             1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
-            5: "Май", 6: "юнь", 7: "юль", 8: "Август",
+            5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
             9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
         }
 
@@ -1790,7 +1791,7 @@ with tab_coeffs:
         """
         month_names_map = {
             1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
-            5: "Май", 6: "юнь", 7: "юль", 8: "Август",
+            5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
             9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
         }
 
@@ -1896,8 +1897,8 @@ with tab_coeffs:
                         "Начальный месяц периода:",
                         options=list(range(1, 13)),
                         format_func=lambda x: [
-                            "Январь", "Февраль", "Март", "Апрель", "Май", "юнь",
-                            "юль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+                            "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+                            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
                         ][x - 1],
                         index=cs["start_month"] - 1,
                         key=f"cs_month_{set_id}",
@@ -2027,7 +2028,7 @@ with tab_coeffs:
                                 cs["result"] = df_coeffs
                                 st.success("Коэффициенты AOV рассчитаны!")
                         with aov_right:
-                            st.markdown("**тоговые коэффициенты AOV**")
+                            st.markdown("**Итоговые коэффициенты AOV**")
                             if cs.get("result") is not None:
                                 st.dataframe(cs["result"], use_container_width=True, height=420)
                             else:
@@ -2041,7 +2042,7 @@ with tab_coeffs:
 
                     month_names_map = {
                         1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
-                        5: "Май", 6: "юнь", 7: "юль", 8: "Август",
+                        5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
                         9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
                     }
 
@@ -2099,7 +2100,7 @@ with tab_coeffs:
 
                     month_names_map = {
                         1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
-                        5: "Май", 6: "юнь", 7: "юль", 8: "Август",
+                        5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
                         9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
                     }
 
@@ -2151,7 +2152,7 @@ with tab_coeffs:
                 if cs.get("result") is not None:
                     cs_type_norm = normalize_coeff_set_type(cs.get("type"))
                     if cs_type_norm == "Спрос (по запросам)":
-                        st.markdown("### тоговые коэффициенты")
+                        st.markdown("### Итоговые коэффициенты")
                         st.dataframe(cs["result"], use_container_width=True)
 
                     buf = io.BytesIO()
@@ -2178,12 +2179,14 @@ with tab_plan:
         """
         <div class="tab-intro">
             <p>1) Выберите месяцы, для которых нужно рассчитать медиаплан.</p>
-            <p>2) Заполните данные по типам рекламных кампаний и базовым метрикам (Показы, CPC, CR, CTR, AOV) для расчета среднего месяца. Значения в блок «Средний месяц» вносятся <b><span style="color:#9EC5FF;">без НДС</span></b>. Помните: сезонность среднего месяца равна 1, и от нее рассчитываются все 12 месяцев через коэффициенты.</p>
-            <p>3) Назначьте для каждого типа РК наборы коэффициентов: Спрос, AOV, Кастомный набор и при необходимости Медийные хвосты.</p>
-            <p>4) Настройте эластичность метрик (CPC, CTR, CR), чтобы учесть реакцию показателей на сезонность спроса.</p>
-            <p>5) Проверьте расчеты по каждому месяцу: слева результаты, справа примененные коэффициенты. Все коэффициенты справа редактируемые: вносите изменения прямо в ячейки и сразу смотрите на результат.</p>
-            <p>6) Опционально используйте левое меню «Быстрая сверка», чтобы закрепить перед глазами средний месяц или TOTAL выбранных месяцев и удобнее сравнивать данные при редактировании.</p>
-            <p>7) Сверьте итоги в блоке TOTAL по выбранным месяцам и при необходимости скорректируйте настройки.</p>
+            <p>2) Выберите пресет метрик <b>E-com</b> или <b>DIY</b>. Пресет влияет на состав метрик и логику отображения отдельных показателей в расчете.</p>
+            <p>3) Заполните данные по типам рекламных кампаний и базовым метрикам для расчета среднего месяца. Значения в блок «Средний месяц» вносятся <b><span style="color:#9EC5FF;">без НДС</span></b>. Помните: сезонность среднего месяца равна 1, и от нее рассчитываются все выбранные месяцы через коэффициенты.</p>
+            <p>4) При необходимости настройте учет <b>НДС</b> и <b>АК</b>: можно включить НДС, задать фиксированную АК на месяц или использовать шкалу АК от TOTAL бюджета месяца без НДС.</p>
+            <p>5) Назначьте для каждого типа РК наборы коэффициентов: <b>Спрос</b>, <b>AOV</b>, <b>Кастомный набор</b> и при необходимости <b>Медийные хвосты</b>.</p>
+            <p>6) Настройте эластичность метрик к сезонности спроса: можно выбрать пресет настроек или задать значения вручную для <b>CPC</b>, <b>CTR</b> и <b>CR</b>.</p>
+            <p>7) Проверьте расчеты по каждому месяцу: слева показаны результаты, справа примененные коэффициенты. Коэффициенты справа редактируемые, поэтому изменения можно вносить прямо в ячейки и сразу смотреть на результат.</p>
+            <p>8) Опционально используйте левое меню «Быстрая сверка», чтобы закрепить перед глазами средний месяц или TOTAL выбранных месяцев и удобнее сравнивать данные при редактировании.</p>
+            <p>9) Сверьте итоги в блоке TOTAL по выбранным месяцам и при необходимости скорректируйте настройки.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2198,6 +2201,8 @@ with tab_plan:
         st.session_state["ak_fixed_month_wo_vat"] = 200000.0
     if "ak_rules_editor_nonce" not in st.session_state:
         st.session_state["ak_rules_editor_nonce"] = 0
+    if "elasticity_editor_nonce" not in st.session_state:
+        st.session_state["elasticity_editor_nonce"] = 0
     default_ak_rules = pd.DataFrame(
         [
             {"min_budget_wo_vat": 0.0, "ak_percent": 0.0},
@@ -2235,8 +2240,8 @@ with tab_plan:
         3: "Март",
         4: "Апрель",
         5: "Май",
-        6: "юнь",
-        7: "юль",
+        6: "Июнь",
+        7: "Июль",
         8: "Август",
         9: "Сентябрь",
         10: "Октябрь",
@@ -2336,10 +2341,12 @@ with tab_plan:
         DISPLAY_COL_RENAME["conversions"] = "Продажи"
         DISPLAY_COL_RENAME["cr"] = "CR в продажи"
         DISPLAY_COL_RENAME["cr_pct"] = "CR в продажи"
+        DISPLAY_COL_RENAME["revenue"] = "Выручка"
     else:
         DISPLAY_COL_RENAME["conversions"] = "Конверсии"
         DISPLAY_COL_RENAME["cr"] = "CR"
         DISPLAY_COL_RENAME["cr_pct"] = "CR"
+        DISPLAY_COL_RENAME["revenue"] = "Доход"
 
     def _df_for_compare(df: pd.DataFrame) -> pd.DataFrame:
         if df is None:
@@ -2581,7 +2588,7 @@ with tab_plan:
                 color: #FFD9CC;
                 font-weight: 600;
             ">
-                <b>Учитываеть НДС 22% в расчетах</b>: настройка влияет на CPM, CPO, ROAS и ДРР.
+                <b>Учитываеть НДС 22% в расчетах</b>: настройка влияет на СPC, CPM, CPO, ROAS и ДРР.
             </div>
             """,
             unsafe_allow_html=True,
@@ -2677,7 +2684,7 @@ with tab_plan:
             if vat_ak_dirty:
                 st.success("Настройки НДС и АК применены.")
             else:
-                st.info("зменений нет: текущие настройки уже применены.")
+                st.info("Изменений нет: текущие настройки уже применены.")
         st.caption(
             "CPC всегда считается от бюджета без НДС. При выключенном режиме НДС расчеты возвращаются к старой логике."
         )
@@ -2969,6 +2976,20 @@ with tab_plan:
                     out.loc[idx_v] = "color: #D0D6DF;"
             return out
 
+        def _coerce_div_for_preview(val: float, default_val: float) -> float:
+            try:
+                num = float(val)
+                return num if num > 0 else default_val
+            except Exception:
+                return default_val
+
+        def _row_divs_match_preset(row: pd.Series, preset_vals: dict[str, float], tol: float = 1e-9) -> bool:
+            return (
+                abs(_coerce_div_for_preview(row.get("cpc_div", 1.0), 1.0) - float(preset_vals["cpc_div"])) <= tol
+                and abs(_coerce_div_for_preview(row.get("ctr_div", 2.0), 2.0) - float(preset_vals["ctr_div"])) <= tol
+                and abs(_coerce_div_for_preview(row.get("cr_div", 10.0), 10.0) - float(preset_vals["cr_div"])) <= tol
+            )
+
         with st.form("elasticity_editor_form"):
             preset_map = {
                 "Слабое": {"cpc_div": 2.0, "ctr_div": 5.0, "cr_div": 15.0},
@@ -3033,6 +3054,7 @@ with tab_plan:
             edit_left, preview_right = st.columns([1.55, 1.05], vertical_alignment="top")
             with edit_left:
                 st.caption("Настройка по типам РК")
+                elasticity_editor_key = f"elasticity_editor_{int(st.session_state.get('elasticity_editor_nonce', 0))}"
                 elasticity_draft = st.data_editor(
                     elasticity_df,
                     num_rows="fixed",
@@ -3044,7 +3066,7 @@ with tab_plan:
                         "preset": st.column_config.SelectboxColumn(
                             "Пресет ▼ (кликните ячейку)",
                             options=["Кастом", "Слабое", "Среднее", "Сильное"],
-                            help="При сохранении пресет подставит значения влияния в этой строке.",
+                            help="Если значения в строке совпадают с пресетом, он сохранится как пресет; если вы измените числа вручную, строка сохранится как «Кастом».",
                         ),
                         "cpc_div": st.column_config.NumberColumn(
                             "CPC",
@@ -3062,16 +3084,37 @@ with tab_plan:
                             help=mhelp("cr_div"),
                         ),
                     },
-                    key="elasticity_editor",
+                    key=elasticity_editor_key,
                 )
             with preview_right:
-                st.caption("Результат (с учетом пресета в строке)")
+                st.caption("Результат по текущим значениям в строке")
                 preview_effective = elasticity_draft[
                     ["campaign_type", "preset", "cpc_div", "ctr_div", "cr_div"]
                 ].copy()
+                saved_by_campaign = elasticity_df.set_index("campaign_type")
                 for idx_row, row in preview_effective.iterrows():
+                    campaign_type = str(row.get("campaign_type", ""))
                     p_name = str(row.get("preset", "Кастом")).strip()
-                    if p_name in preset_map:
+                    preview_effective.at[idx_row, "cpc_div"] = _coerce_div_for_preview(row.get("cpc_div", 1.0), 1.0)
+                    preview_effective.at[idx_row, "ctr_div"] = _coerce_div_for_preview(row.get("ctr_div", 2.0), 2.0)
+                    preview_effective.at[idx_row, "cr_div"] = _coerce_div_for_preview(row.get("cr_div", 10.0), 10.0)
+                    if p_name not in preset_map or campaign_type not in saved_by_campaign.index:
+                        continue
+                    saved_row = saved_by_campaign.loc[campaign_type]
+                    saved_preset = str(saved_row.get("preset", "Кастом")).strip()
+                    saved_cpc = _coerce_div_for_preview(saved_row.get("cpc_div", 1.0), 1.0)
+                    saved_ctr = _coerce_div_for_preview(saved_row.get("ctr_div", 2.0), 2.0)
+                    saved_cr = _coerce_div_for_preview(saved_row.get("cr_div", 10.0), 10.0)
+                    raw_cpc = float(preview_effective.at[idx_row, "cpc_div"])
+                    raw_ctr = float(preview_effective.at[idx_row, "ctr_div"])
+                    raw_cr = float(preview_effective.at[idx_row, "cr_div"])
+                    preset_changed_only = (
+                        p_name != saved_preset
+                        and abs(raw_cpc - saved_cpc) <= 1e-9
+                        and abs(raw_ctr - saved_ctr) <= 1e-9
+                        and abs(raw_cr - saved_cr) <= 1e-9
+                    )
+                    if preset_changed_only:
                         p_vals = preset_map[p_name]
                         preview_effective.at[idx_row, "cpc_div"] = p_vals["cpc_div"]
                         preview_effective.at[idx_row, "ctr_div"] = p_vals["ctr_div"]
@@ -3123,6 +3166,7 @@ with tab_plan:
                 elasticity_draft["cr_div"] = preset_vals["cr_div"]
                 st.session_state["elasticity_df"] = elasticity_draft.copy()
                 elasticity_df = elasticity_draft.copy()
+                st.session_state["elasticity_editor_nonce"] = int(st.session_state.get("elasticity_editor_nonce", 0)) + 1
                 st.success(f"Массово применен пресет «{bulk_preset_name}».")
                 st.rerun()
             else:
@@ -3134,22 +3178,33 @@ with tab_plan:
                 preset_name = str(row.get("preset", "Кастом")).strip()
                 if preset_name in preset_map:
                     preset_vals = preset_map[preset_name]
-                    elasticity_draft.at[idx_row, "cpc_div"] = preset_vals["cpc_div"]
-                    elasticity_draft.at[idx_row, "ctr_div"] = preset_vals["ctr_div"]
-                    elasticity_draft.at[idx_row, "cr_div"] = preset_vals["cr_div"]
+                    if _row_divs_match_preset(row, preset_vals):
+                        elasticity_draft.at[idx_row, "cpc_div"] = preset_vals["cpc_div"]
+                        elasticity_draft.at[idx_row, "ctr_div"] = preset_vals["ctr_div"]
+                        elasticity_draft.at[idx_row, "cr_div"] = preset_vals["cr_div"]
+                    else:
+                        elasticity_draft.at[idx_row, "preset"] = "Кастом"
             st.session_state["elasticity_df"] = elasticity_draft.copy()
             elasticity_df = elasticity_draft.copy()
 
         if reset_recommended_clicked:
-            st.session_state["elasticity_df"] = pd.DataFrame(
-                {
-                    "campaign_type": existing_ctypes,
-                    "preset": ["Среднее"] * len(existing_ctypes),
-                    "cpc_div": [1.0] * len(existing_ctypes),
-                    "ctr_div": [2.0] * len(existing_ctypes),
-                    "cr_div": [10.0] * len(existing_ctypes),
-                }
-            )
+            reset_df = elasticity_draft.copy()
+            saved_by_campaign = elasticity_df.set_index("campaign_type") if not elasticity_df.empty else pd.DataFrame()
+            for idx_row, row in reset_df.iterrows():
+                campaign_type = str(row.get("campaign_type", ""))
+                preset_name = str(row.get("preset", "Кастом")).strip()
+                if preset_name not in preset_map:
+                    saved_preset = ""
+                    if campaign_type and not saved_by_campaign.empty and campaign_type in saved_by_campaign.index:
+                        saved_preset = str(saved_by_campaign.loc[campaign_type].get("preset", "")).strip()
+                    preset_name = saved_preset if saved_preset in preset_map else "Среднее"
+                preset_vals = preset_map[preset_name]
+                reset_df.at[idx_row, "preset"] = preset_name
+                reset_df.at[idx_row, "cpc_div"] = preset_vals["cpc_div"]
+                reset_df.at[idx_row, "ctr_div"] = preset_vals["ctr_div"]
+                reset_df.at[idx_row, "cr_div"] = preset_vals["cr_div"]
+            st.session_state["elasticity_df"] = reset_df
+            st.session_state["elasticity_editor_nonce"] = int(st.session_state.get("elasticity_editor_nonce", 0)) + 1
             st.rerun()
 
         def _safe_div(val: float, default_val: float) -> float:
@@ -3323,7 +3378,7 @@ with tab_plan:
         st.session_state["mp_ref_base_by_campaign"] = base_by_campaign
 
         total_row_raw = {
-            "campaign_type": "того",
+            "campaign_type": "Итого",
             "segment": "ALL",
             "system": "",
             "format": "",
@@ -3375,7 +3430,7 @@ with tab_plan:
                 seg_drr = (seg_budget_basis / seg_rev * 100) if seg_rev > 0 else 0
                 segment_total_rows.append(
                     {
-                        "campaign_type": f"того {seg_name}",
+                        "campaign_type": f"Итого {seg_name}",
                         "segment": seg_name,
                         "system": "",
                         "format": "",
@@ -3504,10 +3559,10 @@ with tab_plan:
                 DISPLAY_COL_RENAME["campaign_type"],
                 DISPLAY_COL_RENAME["segment"],
             )
-        # Принудительно фиксируем значения в последней строке того (после всех преобразований).
+        # Принудительно фиксируем значения в последней строке Итого (после всех преобразований).
         if len(df_base_show) > 0:
             li = len(df_base_show) - 1
-            df_base_show.at[li, DISPLAY_COL_RENAME["campaign_type"]] = "того"
+            df_base_show.at[li, DISPLAY_COL_RENAME["campaign_type"]] = "Итого"
             if DISPLAY_COL_RENAME.get("segment") in df_base_show.columns:
                 df_base_show.at[li, DISPLAY_COL_RENAME["segment"]] = "ALL"
             df_base_show.at[li, DISPLAY_COL_RENAME["system"]] = ""
@@ -3548,11 +3603,11 @@ with tab_plan:
             style = [""] * len(row)
             camp_col = DISPLAY_COL_RENAME.get("campaign_type", "Название кампании")
             camp_val = str(row.get(camp_col, ""))
-            if camp_val == "того":
+            if camp_val == "Итого":
                 style = [
                     f"background-color: #00CDC5; color: #081521; font-weight: 700; border-top: 2px solid {THEME_BORDER};"
                 ] * len(row)
-            elif camp_val.startswith("того "):
+            elif camp_val.startswith("Итого "):
                 style = [
                     f"background-color: #2C6E75; color: #DDEAF0; font-weight: 650; border-top: 1px solid {THEME_BORDER};"
                 ] * len(row)
@@ -3874,7 +3929,7 @@ with tab_plan:
                         total_drr = (total_budget_basis / total_rev * 100) if total_rev > 0 else 0
 
                         total_row_month = {
-                            "campaign_type": "того",
+                            "campaign_type": "Итого",
                             "segment": "ALL",
                             "system": "",
                             "format": "",
@@ -3926,7 +3981,7 @@ with tab_plan:
                                 seg_roas = (seg_rev / seg_budget_basis) if seg_budget_basis > 0 else 0
                                 seg_drr = (seg_budget_basis / seg_rev * 100) if seg_rev > 0 else 0
                                 seg_row = {
-                                    "campaign_type": f"того {seg_name}",
+                                    "campaign_type": f"Итого {seg_name}",
                                     "segment": seg_name,
                                     "system": "",
                                     "format": "",
@@ -4096,11 +4151,11 @@ with tab_plan:
                             style = [""] * len(row)
                             camp_col = DISPLAY_COL_RENAME.get("campaign_type", "Название кампании")
                             camp_val = str(row.get(camp_col, ""))
-                            if camp_val == "того":
+                            if camp_val == "Итого":
                                 style = [
                                     f"background-color: #00CDC5; color: #081521; font-weight: 700; border-top: 2px solid {THEME_BORDER};"
                                 ] * len(row)
-                            elif camp_val.startswith("того "):
+                            elif camp_val.startswith("Итого "):
                                 style = [
                                     f"background-color: #2C6E75; color: #DDEAF0; font-weight: 650; border-top: 1px solid {THEME_BORDER};"
                                 ] * len(row)
@@ -4118,7 +4173,7 @@ with tab_plan:
                     else:
                         st.info("Нет данных для этого месяца.")
 
-    # ---------- 4. тоги по выбранным месяцам (TOTAL) ----------
+    # ---------- 4. Итоги по выбранным месяцам (TOTAL) ----------
 
     if all_months_results:
         df_all = pd.concat(all_months_results, ignore_index=True)
@@ -4271,7 +4326,7 @@ with tab_plan:
             else:
                 st.caption("Нет данных для выбранного режима сверки.")
 
-    with st.expander("4. тоги по выбранным месяцам (TOTAL)", expanded=True):
+    with st.expander("4. Итоги по выбранным месяцам (TOTAL)", expanded=True):
         if df_all.empty:
             st.info("Нет данных для итогов. Заполните медиаплан по месяцам.")
         else:
@@ -4317,6 +4372,11 @@ with tab_plan:
                 budget_series / agg["conversions"],
                 0.0,
             )
+            agg["aov"] = np.where(
+                agg["conversions"] > 0,
+                agg["revenue"] / agg["conversions"],
+                0.0,
+            )
             agg["roas"] = np.where(
                 budget_series > 0,
                 agg["revenue"] / budget_series,
@@ -4358,8 +4418,10 @@ with tab_plan:
                 total_row["cpc"] = 0.0
             if total_row["conversions"] > 0:
                 total_row["cpa"] = total_budget_basis / total_row["conversions"]
+                total_row["aov"] = total_row["revenue"] / total_row["conversions"]
             else:
                 total_row["cpa"] = 0.0
+                total_row["aov"] = 0.0
             if total_budget_basis > 0:
                 total_row["roas"] = total_row["revenue"] / total_budget_basis
             else:
@@ -4382,7 +4444,7 @@ with tab_plan:
                         seg_budget_basis = seg_cost_with_vat if use_vat_budget_metrics else seg_cost
                     seg_row = {
                         "month_num": 998,
-                        "month_name": f"того {seg_name}",
+                        "month_name": f"Итого {seg_name}",
                         "impressions": float(seg_df["impressions"].sum()),
                         "clicks": float(seg_df["clicks"].sum()),
                         "conversions": float(seg_df["conversions"].sum()),
@@ -4397,38 +4459,57 @@ with tab_plan:
                     seg_row["cpc"] = (seg_row["cost"] / seg_row["clicks"]) if seg_row["clicks"] > 0 else 0.0
                     seg_row["cpm"] = (seg_budget_basis / (seg_row["impressions"] / 1000.0)) if seg_row["impressions"] > 0 else 0.0
                     seg_row["cpa"] = (seg_budget_basis / seg_row["conversions"]) if seg_row["conversions"] > 0 else 0.0
+                    seg_row["aov"] = (seg_row["revenue"] / seg_row["conversions"]) if seg_row["conversions"] > 0 else 0.0
                     seg_row["roas"] = (seg_row["revenue"] / seg_budget_basis) if seg_budget_basis > 0 else 0.0
                     seg_row["drr"] = (seg_budget_basis / seg_row["revenue"] * 100.0) if seg_row["revenue"] > 0 else 0.0
                     segment_total_rows.append(seg_row)
 
             agg = pd.concat([agg, pd.DataFrame(segment_total_rows + [total_row])], ignore_index=True)
 
-            agg_cols = [
-                "month_name",
-                "impressions",
-                "clicks",
-                "conversions",
-            ]
-            agg_cols += [
-                "cost",
-                "cost_with_vat",
-                "cost_with_vat_ak",
-                "revenue",
-                "ctr",
-                "cpc",
-                "cr",
-                "cpm",
-                "cpa",
-                "roas",
-                "drr",
-            ]
+            if is_diy_preset:
+                agg_cols = [
+                    "month_name",
+                    "impressions",
+                    "clicks",
+                    "ctr",
+                    "cpc",
+                    "cost",
+                    "cost_with_vat",
+                    "cost_with_vat_ak",
+                    "cr",
+                    "conversions",
+                    "aov",
+                    "revenue",
+                    "cpa",
+                    "cpm",
+                    "roas",
+                    "drr",
+                ]
+            else:
+                agg_cols = [
+                    "month_name",
+                    "impressions",
+                    "clicks",
+                    "conversions",
+                    "cost",
+                    "cost_with_vat",
+                    "cost_with_vat_ak",
+                    "revenue",
+                    "ctr",
+                    "cpc",
+                    "cr",
+                    "cpm",
+                    "cpa",
+                    "roas",
+                    "drr",
+                ]
             agg_show = agg[agg_cols]
             agg_show = agg_show.rename(columns={"roas": "ROAS"})
             agg_show = agg_show.rename(columns=DISPLAY_COL_RENAME)
 
             numeric_cols = [
                 "impressions", "clicks", "conversions", "cost", "cost_with_vat", "cost_with_vat_ak", "revenue",
-                "ctr", "cpc", "cr", "cpm", "cpa", "ROAS", "drr"
+                "ctr", "cpc", "cr", "aov", "cpm", "cpa", "ROAS", "drr"
             ]
             numeric_cols = [DISPLAY_COL_RENAME.get(c, c) for c in numeric_cols]
 
@@ -4443,7 +4524,7 @@ with tab_plan:
 
             def _style_metric_col(col: pd.Series) -> pd.Series:
                 styles = pd.Series([""] * len(col), index=col.index)
-                mask = ~agg_show["Месяц"].astype(str).str.startswith("того")
+                mask = ~agg_show["Месяц"].astype(str).str.startswith("Итого")
                 mask &= agg_show["Месяц"] != "TOTAL"
                 vals = pd.to_numeric(col[mask], errors="coerce").dropna()
                 if vals.empty:
@@ -4467,7 +4548,7 @@ with tab_plan:
                     style = [
                         f"background-color: #00CDC5; color: #081521; font-weight: 700; border-top: 2px solid {THEME_BORDER};"
                     ] * len(row)
-                elif month_val.startswith("того "):
+                elif month_val.startswith("Итого "):
                     style = [
                         f"background-color: #2C6E75; color: #DDEAF0; font-weight: 650; border-top: 1px solid {THEME_BORDER};"
                     ] * len(row)
@@ -4481,6 +4562,7 @@ with tab_plan:
                 DISPLAY_COL_RENAME["cost_with_vat"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["cost_with_vat_ak"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["revenue"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
+                DISPLAY_COL_RENAME["aov"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["cpm"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["cpa"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["cpc"]: lambda x: "" if pd.isna(x) else f"{x:.2f} \u20BD",
@@ -4560,14 +4642,31 @@ with tab_charts:
             3: "Март",
             4: "Апрель",
             5: "Май",
-            6: "юнь",
-            7: "юль",
+            6: "Июнь",
+            7: "Июль",
             8: "Август",
             9: "Сентябрь",
             10: "Октябрь",
             11: "Ноябрь",
             12: "Декабрь",
         }
+
+        chart_campaign_palette = [
+            "#0066E0", "#00CDC5", "#9747FF", "#FF6333",
+            "#3D8EF0", "#42DDD6", "#B07BFF", "#FF8A66",
+            "#2D5BFF", "#17B890", "#C77DFF", "#FF9F1C",
+        ]
+
+        def _build_campaign_color_map(campaign_names: list[str]) -> dict[str, str]:
+            ordered_names = []
+            for name in campaign_names:
+                name_str = str(name).strip()
+                if name_str and name_str not in ordered_names:
+                    ordered_names.append(name_str)
+            return {
+                name: chart_campaign_palette[idx % len(chart_campaign_palette)]
+                for idx, name in enumerate(ordered_names)
+            }
 
         available_months = sorted(df_all["month_num"].unique())
         month_options = [f"{m}. {month_names_full[m]}" for m in available_months]
@@ -4585,6 +4684,7 @@ with tab_charts:
             selected_month_nums_charts = [int(label.split(".")[0]) for label in selected_labels]
 
             all_campaign_types = df_all["campaign_type"].unique().tolist()
+            campaign_color_map = _build_campaign_color_map(all_campaign_types)
             selected_campaign_types = st.multiselect(
                 "Типы РК для включения:",
                 options=all_campaign_types,
@@ -4868,11 +4968,14 @@ with tab_charts:
                     ]
 
                     rows = []
+                    metric_series_map = {}
                     for metric_label, metric_key in metric_specs:
                         row = {"Метрика": metric_label}
+                        month_value_map = {}
                         for m in selected_month_nums_charts:
                             month_col = month_names_full[m]
                             val = agg_by_month.get(m, {}).get(metric_key, 0.0)
+                            month_value_map[month_col] = float(val)
                             if metric_key in ["impressions", "clicks", "conversions"]:
                                 row[month_col] = _fmt_int(val)
                             elif metric_key in ["cost", "cost_with_vat", "cost_with_vat_ak", "revenue", "cpa", "aov"]:
@@ -4900,6 +5003,11 @@ with tab_charts:
                         else:
                             row["TOTAL"] = _fmt_int(total_val)
                         rows.append(row)
+                        metric_series_map[metric_label] = {
+                            "metric_key": metric_key,
+                            "months": month_value_map,
+                            "total": float(total_val),
+                        }
 
                     summary_matrix = pd.DataFrame(rows).set_index("Метрика")
                     ui_section_title("Сводная таблица (месяцы в колонках)")
@@ -4957,25 +5065,117 @@ with tab_charts:
                             )
                         return styles
 
-                    legend_c1, legend_c2 = st.columns([4.5, 1.5], vertical_alignment="center")
-                    with legend_c2:
-                        st.markdown(
-                            f"""
-                            <div style="border:1px solid {THEME_BORDER}; border-radius:10px; padding:8px 10px; background:{THEME_CARD_BG};">
-                                <div style="font-size:12px; color:{THEME_LEGEND_TEXT}; margin-bottom:5px;">Heatmap: min -> max</div>
-                                <div style="height:10px; border-radius:999px; border:1px solid {THEME_BORDER}; background: linear-gradient(90deg, {base_low}, {base_high});"></div>
-                                <div style="display:flex; justify-content:space-between; font-size:11px; color:{THEME_LEGEND_TEXT}; margin-top:4px;">
-                                    <span>min</span><span>max</span>
-                                </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-                    with legend_c1:
-                        st.caption("Шкала применяется отдельно в каждой строке метрик.")
+                    st.caption(
+                        "Отмечайте чекбоксы слева у нужных строк: для одной метрики строится график фактических значений, "
+                        "для нескольких метрик — сравнительная динамика в относительном виде."
+                    )
 
+                    selection_state_key = "charts_summary_selected_metrics"
+                    prev_selected_metrics = st.session_state.get(selection_state_key, [])
                     styled_summary = summary_matrix.style.apply(_row_heat_style, axis=1)
-                    st.dataframe(styled_summary, use_container_width=True)
+                    summary_selector_df = pd.DataFrame(
+                        {
+                            "График": summary_matrix.index.isin(prev_selected_metrics),
+                        }
+                    )
+                    selector_col, table_col = st.columns([0.07, 0.93], vertical_alignment="top")
+                    with selector_col:
+                        summary_editor = st.data_editor(
+                            summary_selector_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "График": st.column_config.CheckboxColumn(
+                                    "График",
+                                    help="Отметьте строку, чтобы сразу построить график ниже.",
+                                    width="small",
+                                ),
+                            },
+                            key="charts_summary_selector_editor",
+                        )
+                    with table_col:
+                        st.dataframe(styled_summary, use_container_width=True)
+
+                    selected_metrics_for_chart = summary_editor.loc[
+                        summary_editor["График"].fillna(False),
+                    ].index.tolist()
+                    selected_metrics_for_chart = [
+                        str(summary_matrix.index[idx])
+                        for idx in selected_metrics_for_chart
+                        if 0 <= idx < len(summary_matrix.index)
+                    ]
+                    st.session_state[selection_state_key] = selected_metrics_for_chart
+
+                    if selected_metrics_for_chart:
+                        chart_rows = []
+                        if len(selected_metrics_for_chart) == 1:
+                            metric_label = selected_metrics_for_chart[0]
+                            metric_payload = metric_series_map.get(metric_label, {})
+                            month_map = metric_payload.get("months", {})
+                            for month_col in month_headers:
+                                chart_rows.append(
+                                    {
+                                        "Месяц": month_col,
+                                        "Метрика": metric_label,
+                                        "Значение": float(month_map.get(month_col, 0.0)),
+                                    }
+                                )
+                            chart_title = f"Динамика метрики: {metric_label}"
+                            chart_y_title = metric_label
+                            chart_note = None
+                        else:
+                            for metric_label in selected_metrics_for_chart:
+                                metric_payload = metric_series_map.get(metric_label, {})
+                                month_map = metric_payload.get("months", {})
+                                base_value = None
+                                for month_col in month_headers:
+                                    value = float(month_map.get(month_col, 0.0))
+                                    if base_value is None and value != 0:
+                                        base_value = value
+                                if base_value is None:
+                                    base_value = 0.0
+                                for month_col in month_headers:
+                                    value = float(month_map.get(month_col, 0.0))
+                                    relative_value = (value / base_value * 100.0) if base_value not in (None, 0.0) else 0.0
+                                    chart_rows.append(
+                                        {
+                                            "Месяц": month_col,
+                                            "Метрика": metric_label,
+                                            "Значение": relative_value,
+                                        }
+                                    )
+                            chart_title = "Сравнение динамики выбранных метрик"
+                            chart_y_title = "Индекс, %"
+                            chart_note = (
+                                "Для нескольких строк график строится в относительном виде: "
+                                "первая ненулевая точка каждой метрики принимается за 100%."
+                            )
+
+                        chart_df = pd.DataFrame(chart_rows)
+                        fig_selected_metrics = px.line(
+                            chart_df,
+                            x="Месяц",
+                            y="Значение",
+                            color="Метрика",
+                            markers=True,
+                            title=chart_title,
+                        )
+                        fig_selected_metrics.update_layout(
+                            height=420,
+                            margin=dict(l=12, r=12, t=64, b=12),
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            font=dict(color=THEME_PLOT_TEXT),
+                            xaxis_title="Месяц",
+                            yaxis_title=chart_y_title,
+                            legend_title_text="Метрика",
+                        )
+                        fig_selected_metrics.update_traces(line=dict(width=3))
+                        st.plotly_chart(fig_selected_metrics, use_container_width=True)
+                        if chart_note:
+                            st.caption(chart_note)
+                    else:
+                        st.caption("Отметьте чекбокс слева у нужной строки, чтобы построить график по метрике.")
 
                     # ---------- Круговые диаграммы по типам РК ----------
 
@@ -4993,15 +5193,15 @@ with tab_charts:
                     )
 
                     if show_pies:
-                        pie_palette = [
-                            "#0066E0", "#00CDC5", "#9747FF", "#FF6333",
-                            "#3D8EF0", "#42DDD6", "#B07BFF", "#FF8A66",
-                        ]
+                        pie_color_map = {
+                            ct_name: campaign_color_map.get(ct_name, chart_campaign_palette[0])
+                            for ct_name in agg_ct["campaign_type"].astype(str).tolist()
+                        }
                         st.caption("Общая легенда")
                         legend_cols_count = min(4, max(1, len(agg_ct)))
                         legend_cols = st.columns(legend_cols_count)
                         for i, ct_name in enumerate(agg_ct["campaign_type"].tolist()):
-                            c = pie_palette[i % len(pie_palette)]
+                            c = pie_color_map.get(str(ct_name), chart_campaign_palette[0])
                             with legend_cols[i % legend_cols_count]:
                                 st.markdown(
                                     f"<span style='color:{c}; font-weight:700;'>●</span> "
@@ -5016,7 +5216,8 @@ with tab_charts:
                                 names="campaign_type",
                                 values="cost",
                                 title="Доля бюджета по типам РК",
-                                color_discrete_sequence=pie_palette,
+                                color="campaign_type",
+                                color_discrete_map=pie_color_map,
                             )
                             fig_cost.update_traces(textposition="inside", textinfo="percent+label")
                             fig_cost.update_layout(
@@ -5035,7 +5236,8 @@ with tab_charts:
                                 names="campaign_type",
                                 values="conversions",
                                 title="Доля конверсий по типам РК",
-                                color_discrete_sequence=pie_palette,
+                                color="campaign_type",
+                                color_discrete_map=pie_color_map,
                             )
                             fig_conv.update_traces(textposition="inside", textinfo="percent+label")
                             fig_conv.update_layout(
@@ -5054,7 +5256,8 @@ with tab_charts:
                                 names="campaign_type",
                                 values="revenue",
                                 title="Доля дохода по типам РК",
-                                color_discrete_sequence=pie_palette,
+                                color="campaign_type",
+                                color_discrete_map=pie_color_map,
                             )
                             fig_rev.update_traces(textposition="inside", textinfo="percent+label")
                             fig_rev.update_layout(
@@ -5200,8 +5403,8 @@ with tab_export:
             3: "Март",
             4: "Апрель",
             5: "Май",
-            6: "юнь",
-            7: "юль",
+            6: "Июнь",
+            7: "Июль",
             8: "Август",
             9: "Сентябрь",
             10: "Октябрь",
@@ -5239,6 +5442,115 @@ with tab_export:
                 st.info("Нет данных для выбранных фильтров экспорта.")
             else:
                 st.caption(f"Строк к экспорту: {len(df_export)}")
+
+                st.markdown("#### Export BI (Power BI)")
+                st.caption("ZIP with fact/dim CSV tables (UTF-8). Import in Power BI via Get data -> Text/CSV.")
+
+                bi_export_df = df_export.copy()
+                bi_use_vat = bool(st.session_state.get("use_vat_budget_metrics", True))
+                bi_use_ak = bool(st.session_state.get("use_ak_budget_metrics", False))
+
+                if bi_use_ak:
+                    if bi_use_vat:
+                        bi_export_df["budget_basis"] = bi_export_df.get("cost_with_vat_ak", 0.0)
+                    else:
+                        bi_export_df["budget_basis"] = (
+                            pd.to_numeric(bi_export_df.get("cost", 0.0), errors="coerce").fillna(0.0)
+                            + pd.to_numeric(bi_export_df.get("ak_cost_wo_vat", 0.0), errors="coerce").fillna(0.0)
+                        )
+                else:
+                    bi_export_df["budget_basis"] = (
+                        bi_export_df.get("cost_with_vat", 0.0) if bi_use_vat else bi_export_df.get("cost", 0.0)
+                    )
+
+                if "segment" not in bi_export_df.columns:
+                    bi_export_df["segment"] = "ALL"
+                bi_export_df["segment"] = bi_export_df["segment"].fillna("ALL").astype(str)
+                bi_export_df["orders"] = pd.to_numeric(
+                    bi_export_df.get("conversions", 0.0), errors="coerce"
+                ).fillna(0.0)
+
+                dim_month = (
+                    bi_export_df[["month_num", "month_name"]]
+                    .dropna(subset=["month_num"])
+                    .drop_duplicates()
+                    .sort_values("month_num")
+                    .rename(columns={"month_num": "month_key"})
+                    .reset_index(drop=True)
+                )
+                if not dim_month.empty:
+                    dim_month["month_key"] = dim_month["month_key"].astype(int)
+
+                dim_campaign = (
+                    bi_export_df[["campaign_type", "system", "format", "segment"]]
+                    .fillna("")
+                    .drop_duplicates()
+                    .reset_index(drop=True)
+                )
+                dim_campaign.insert(0, "campaign_key", np.arange(1, len(dim_campaign) + 1, dtype=int))
+
+                fact = bi_export_df.merge(
+                    dim_campaign,
+                    on=["campaign_type", "system", "format", "segment"],
+                    how="left",
+                ).copy()
+                fact["month_key"] = pd.to_numeric(fact.get("month_num"), errors="coerce").fillna(0).astype(int)
+
+                fact_cols = [
+                    "month_key", "campaign_key",
+                    "month_num", "month_name", "campaign_type", "segment", "system", "format",
+                    "impressions", "clicks", "orders", "conversions",
+                    "cost", "cost_with_vat", "ak_cost_wo_vat", "cost_with_vat_ak", "budget_basis",
+                    "ctr", "cpc", "cr", "cpm", "cpa", "aov", "revenue", "roas", "drr",
+                    "ak_rate", "ak_rate_pct",
+                ]
+                for c in fact_cols:
+                    if c not in fact.columns:
+                        fact[c] = np.nan
+                fact = fact[fact_cols].copy()
+
+                dim_segment = (
+                    bi_export_df[["segment"]]
+                    .fillna("ALL")
+                    .drop_duplicates()
+                    .sort_values("segment")
+                    .reset_index(drop=True)
+                )
+                dim_segment.insert(0, "segment_key", np.arange(1, len(dim_segment) + 1, dtype=int))
+
+                readme_text = (
+                    "media_planner BI export package\n"
+                    "Import in Power BI Desktop: Get data -> Text/CSV.\n"
+                    "Files:\n"
+                    "- fact_mediaplan.csv (main fact table)\n"
+                    "- dim_month.csv (join by month_key)\n"
+                    "- dim_campaign.csv (join by campaign_key)\n"
+                    "- dim_segment.csv (segment dictionary)\n"
+                    "Notes:\n"
+                    f"- budget_basis uses current VAT/AK mode (use_vat={bi_use_vat}, use_ak={bi_use_ak}).\n"
+                    "- orders duplicates conversions for BI naming convenience.\n"
+                )
+
+                def _to_csv_bytes(df_src: pd.DataFrame) -> bytes:
+                    return df_src.to_csv(index=False).encode("utf-8-sig")
+
+                bi_zip_buf = io.BytesIO()
+                with zipfile.ZipFile(bi_zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr("fact_mediaplan.csv", _to_csv_bytes(fact))
+                    zf.writestr("dim_month.csv", _to_csv_bytes(dim_month))
+                    zf.writestr("dim_campaign.csv", _to_csv_bytes(dim_campaign))
+                    zf.writestr("dim_segment.csv", _to_csv_bytes(dim_segment))
+                    zf.writestr("README.txt", readme_text.encode("utf-8"))
+                bi_zip_buf.seek(0)
+
+                bi_ts = dt.datetime.now().strftime("%Y%m%d_%H%M")
+                st.download_button(
+                    "Download BI package (Power BI CSV ZIP)",
+                    data=bi_zip_buf.getvalue(),
+                    file_name=f"mediaplan_bi_export_{bi_ts}.zip",
+                    mime="application/zip",
+                    key="download_export_bi_zip",
+                )
 
                 # ---------- 1) Детальный Excel ----------
                 timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
