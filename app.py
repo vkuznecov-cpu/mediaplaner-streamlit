@@ -46,7 +46,7 @@ METRIC_PRESETS = {
     },
     "diy": {
         "label": "DIY",
-        "description": "Пресет для DIY: продажи (от кликов), CR в продажи, SOV и доля новых клиентов.",
+        "description": "Пресет для DIY: продажи (от кликов), CR в продажу, SOV и доля новых клиентов.",
     },
 }
 
@@ -410,6 +410,14 @@ def _df_from_payload(payload: dict | None) -> pd.DataFrame:
     if not isinstance(cols, list) or not isinstance(rows, list):
         return pd.DataFrame()
     return pd.DataFrame(rows, columns=cols if cols else None)
+
+
+def safe_select_columns(df: pd.DataFrame, columns: list[str], fill_value=np.nan) -> pd.DataFrame:
+    work = df.copy()
+    for col in columns:
+        if col not in work.columns:
+            work[col] = fill_value
+    return work[columns].copy()
 
 
 def _bootstrap_reference_from_campaigns(campaigns_df: pd.DataFrame | None) -> None:
@@ -1699,7 +1707,7 @@ with tab_coeffs:
         unsafe_allow_html=True,
     )
     st.caption(
-        "сточники данных: для «Спрос» — Wordstat; для «AOV» — фактический средний чек из аналитики; "
+        "Источники данных: для «Спрос» — Wordstat; для «AOV» — фактический средний чек из аналитики; "
         "для «Медийных хвостов» — обратитесь к специалистам по медийной рекламе для расчета влияния."
     )
 
@@ -2339,8 +2347,8 @@ with tab_plan:
     is_diy_preset = active_preset_key == "diy"
     if is_diy_preset:
         DISPLAY_COL_RENAME["conversions"] = "Продажи"
-        DISPLAY_COL_RENAME["cr"] = "CR в продажи"
-        DISPLAY_COL_RENAME["cr_pct"] = "CR в продажи"
+        DISPLAY_COL_RENAME["cr"] = "CR в продажу"
+        DISPLAY_COL_RENAME["cr_pct"] = "CR в продажу"
         DISPLAY_COL_RENAME["revenue"] = "Выручка"
     else:
         DISPLAY_COL_RENAME["conversions"] = "Конверсии"
@@ -2422,7 +2430,7 @@ with tab_plan:
                 "CPC, ₽ (средний месяц)", format="%.2f", help=mhelp("cpc")
             ),
             "cr_avg_percent": st.column_config.NumberColumn(
-                "CR в продажи, % (средний месяц)" if is_diy_preset else "CR, % (средний месяц)",
+                "CR в продажу, % (средний месяц)" if is_diy_preset else "CR, % (средний месяц)",
                 format="%.2f",
                 help=mhelp("cr"),
             ),
@@ -2522,7 +2530,7 @@ with tab_plan:
 
         if missing_mask.any():
             st.error(
-                "Заполни пожалуйста все поля в среднем месяце (Показы, CTR, CPC, CR, AOV) "
+                "Заполните, пожалуйста, все поля в среднем месяце (Показы, CTR, CPC, CR, AOV) "
                 "для каждого типа РК. Проверь строки, где есть пустые ячейки."
             )
             st.stop()
@@ -2588,13 +2596,13 @@ with tab_plan:
                 color: #FFD9CC;
                 font-weight: 600;
             ">
-                <b>Учитываеть НДС 22% в расчетах</b>: настройка влияет на СPC, CPM, CPO, ROAS и ДРР.
+                <b>Учитывать НДС 22% в расчетах</b>: настройка влияет на CPC, CPM, CPO, ROAS и ДРР.
             </div>
             """,
             unsafe_allow_html=True,
         )
         use_vat_budget_metrics = st.checkbox(
-            "Учитываеть НДС 22% в расчетах",
+                "Учитывать НДС 22% в расчетах",
             key="use_vat_budget_metrics",
         )
         use_ak_budget_metrics = st.checkbox(
@@ -3551,7 +3559,7 @@ with tab_plan:
             )
             base_show_cols += ["available_capacity", "sov_pct", "new_clients_share_pct"]
         # Порядок метрик задан под бизнес-логику проверки.
-        df_base_show = df_base_show[base_show_cols]
+        df_base_show = safe_select_columns(df_base_show, base_show_cols, fill_value="")
         df_base_show = df_base_show.rename(columns=DISPLAY_COL_RENAME)
         if is_diy_preset:
             df_base_show = reorder_rows_with_segment_subtotals(
@@ -4099,7 +4107,7 @@ with tab_plan:
                             month_show_cols.insert(3, "segment")
                         if is_diy_preset:
                             month_show_cols += ["available_capacity", "sov_pct", "new_clients_share_pct"]
-                        df_rows_show = df_rows_show[month_show_cols]
+                        df_rows_show = safe_select_columns(df_rows_show, month_show_cols, fill_value="")
                         df_rows_show = df_rows_show.rename(columns=DISPLAY_COL_RENAME)
 
                         # TOTAL отдельной строкой ниже основной таблицы.
@@ -4136,7 +4144,7 @@ with tab_plan:
                             total_month_cols.insert(3, "segment")
                         if is_diy_preset:
                             total_month_cols += ["available_capacity", "sov_pct", "new_clients_share_pct"]
-                        total_month_show = total_month_show[total_month_cols].rename(columns=DISPLAY_COL_RENAME)
+                        total_month_show = safe_select_columns(total_month_show, total_month_cols, fill_value="").rename(columns=DISPLAY_COL_RENAME)
 
                         # Простой вариант: возвращаем TOTAL обратно в основную таблицу.
                         df_month_with_total_show = pd.concat([df_rows_show, total_month_show], ignore_index=True)
@@ -4503,7 +4511,7 @@ with tab_plan:
                     "roas",
                     "drr",
                 ]
-            agg_show = agg[agg_cols]
+            agg_show = safe_select_columns(agg, agg_cols)
             agg_show = agg_show.rename(columns={"roas": "ROAS"})
             agg_show = agg_show.rename(columns=DISPLAY_COL_RENAME)
 
@@ -4512,6 +4520,7 @@ with tab_plan:
                 "ctr", "cpc", "cr", "aov", "cpm", "cpa", "ROAS", "drr"
             ]
             numeric_cols = [DISPLAY_COL_RENAME.get(c, c) for c in numeric_cols]
+            numeric_cols = [c for c in numeric_cols if c in agg_show.columns]
 
             def _blend_hex(c1: str, c2: str, t: float) -> str:
                 t = max(0.0, min(1.0, t))
@@ -4571,6 +4580,7 @@ with tab_plan:
                 DISPLAY_COL_RENAME["drr"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
                 "ROAS": lambda x: "" if pd.isna(x) else f"{x * 100:.2f} %",
             }
+            total_formatters = {k: v for k, v in total_formatters.items() if k in agg_show.columns}
             styled_total = (
                 agg_show.style
                 .format(total_formatters)
@@ -5443,7 +5453,7 @@ with tab_export:
             else:
                 st.caption(f"Строк к экспорту: {len(df_export)}")
 
-                st.markdown("#### Export BI (Power BI)")
+                st.markdown("#### Экспорт данных")
                 st.caption("ZIP with fact/dim CSV tables (UTF-8). Import in Power BI via Get data -> Text/CSV.")
 
                 bi_export_df = df_export.copy()
@@ -5566,7 +5576,7 @@ with tab_export:
                     for c in detail_cols:
                         if c not in df_export.columns:
                             df_export[c] = np.nan
-                    df_detail = df_export[detail_cols].rename(
+                    df_detail = safe_select_columns(df_export, detail_cols).rename(
                         columns={
                             "month_num": "Месяц №",
                             "month_name": "Месяц",
