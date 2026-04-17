@@ -2619,6 +2619,7 @@ with tab_coeffs:
                     ):
                         cs["df_data"] = pd.DataFrame(
                             {
+                                "month_num": list(range(1, 13)),
                                 "Месяц": [month_names_map[m] for m in range(1, 13)],
                                 "Коэф.": [1.0] * 12,
                                 "Коэф. AOV": [1.0] * 12,
@@ -2650,6 +2651,13 @@ with tab_coeffs:
                             df_coeffs = df_edit.copy()
                             if "Коэф." not in df_coeffs.columns:
                                 df_coeffs["Коэф."] = 1.0
+                            if "month_num" not in df_coeffs.columns:
+                                df_coeffs["month_num"] = list(range(1, len(df_coeffs) + 1))
+                            if "Месяц" not in df_coeffs.columns:
+                                df_coeffs["Месяц"] = [
+                                    month_names_map.get(int(m), str(m))
+                                    for m in pd.to_numeric(df_coeffs["month_num"], errors="coerce").fillna(0).astype(int)
+                                ]
                             df_coeffs["Номер месяца"] = df_coeffs["month_num"].astype(int)
                             df_coeffs["Коэф. AOV"] = df_coeffs["Коэф."].astype(float)
                             df_coeffs = df_coeffs[["Номер месяца", "Месяц", "Коэф.", "Коэф. AOV"]]
