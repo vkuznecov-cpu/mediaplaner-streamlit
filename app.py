@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import numpy as np
 import pandas as pd
 import io
@@ -7,6 +7,7 @@ import os
 import hashlib
 import base64
 import zipfile
+import re
 from dataclasses import dataclass
 from io import BytesIO
 from openpyxl import load_workbook
@@ -57,6 +58,21 @@ METRIC_PRESETS = {
 REAL_ESTATE_FUNNEL_OPTIONS = {
     "simple": "Упрощённая воронка",
     "full": "Полная воронка",
+}
+
+MONTH_NAMES_FULL = {
+    1: "Январь",
+    2: "Февраль",
+    3: "Март",
+    4: "Апрель",
+    5: "Май",
+    6: "Июнь",
+    7: "Июль",
+    8: "Август",
+    9: "Сентябрь",
+    10: "Октябрь",
+    11: "Ноябрь",
+    12: "Декабрь",
 }
 
 st.markdown(
@@ -198,6 +214,12 @@ st.markdown(
         font-weight: 650;
         letter-spacing: 0.01em;
     }
+    [data-testid="stExpander"] div[data-testid="stForm"] {
+        border: 0 !important;
+        padding: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+    }
     /* MOTION START */
     .stButton > button,
     .stFormSubmitButton > button,
@@ -254,7 +276,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------- МОДЕЛЬ  ФУНКЦ РАСЧЁТА ----------
+# ---------- МОДЕЛЬ ФУНКЦИЙ РАСЧЁТА ----------
 
 @dataclass
 class PlanInput:
@@ -395,50 +417,57 @@ def normalize_coeff_set_type(raw_type: str) -> str:
     """
     val = str(raw_type or "").strip()
     compact = val.lower().replace(" ", "")
-    if any(token in compact for token in ["demand", "запрос", "спрос", "??????????", "??????????"]):
+    if compact in {"спрос(позапросам)", "спроспозапросам", "demand"}:
         return "Спрос (по запросам)"
-    if compact.startswith("aov") or "среднийчек" in compact or "????????????????????" in compact:
+    if compact in {"aov(среднийчек)", "aovсреднийчек", "aov"}:
         return "AOV (средний чек)"
-    if any(token in compact for token in ["custom", "кастом", "????????????"]):
+    if compact in {"кастомныйнабор", "custom", "customset"}:
         return "Кастомный набор"
-    if any(token in compact for token in ["media_tail", "mediatail", "mediatails", "хвост", "??????????"]):
+    if compact in {"медийныехвосты", "медийныйхвост", "mediatails", "media_tail", "media tails"}:
         return "Медийные хвосты"
     return val
 
 
-def classify_coeff_set_type(raw_type: str) -> str:
-    normalized = normalize_coeff_set_type(raw_type)
-    compact = str(normalized or "").lower().replace(" ", "")
-    if any(token in compact for token in ["demand", "запрос", "спрос"]):
-        return "demand"
-    if compact.startswith("aov"):
-        return "aov"
-    if "custom" in compact or "кастом" in compact:
-        return "custom"
-    if any(token in compact for token in ["media_tail", "mediatail", "mediatails", "хвост"]):
-        return "media_tail"
-    return "unknown"
+def get_coeff_set_id_value(coeff_set: dict) -> str:
+    try:
+        return str(int(coeff_set.get("id", 0) or 0))
+    except Exception:
+        return ""
 
 
-def infer_coeff_set_bucket(coeff_set: dict) -> str:
-    bucket = classify_coeff_set_type(coeff_set.get("type"))
-    if bucket != "unknown":
-        return bucket
-    df_res = coeff_set.get("result")
-    if not isinstance(df_res, pd.DataFrame) or df_res.empty:
-        return "unknown"
-    cols = {str(c).strip() for c in df_res.columns}
-    if "????. AOV" in cols or ("????. AOV" in cols and "????. ???." not in cols):
-        if "????." in cols and "????. AOV" in cols and "????. AOV" not in cols:
-            return "custom"
-        return "aov"
-    if "????. ???." in cols and "????." in cols:
-        return "demand"
-    if "????." in cols and "????. AOV" in cols:
-        return "custom"
-    if "????." in cols:
-        return "demand"
-    return "unknown"
+def get_coeff_set_label(coeff_set: dict) -> str:
+    set_id = get_coeff_set_id_value(coeff_set)
+    set_name = str(coeff_set.get("name", "")).strip()
+    if not set_id:
+        return set_name
+    return f"[{set_id}] {set_name}" if set_name else f"[{set_id}]"
+
+
+def normalize_coeff_link_value(raw_value, coeff_sets: list[dict], allowed_ids: set[str] | None = None) -> str:
+    raw_text = str(raw_value or "").strip()
+    if raw_text == "":
+        return ""
+
+    coeff_sets_by_id = {
+        get_coeff_set_id_value(cs): cs
+        for cs in coeff_sets
+        if isinstance(cs, dict) and get_coeff_set_id_value(cs)
+    }
+
+    match = re.match(r"^\[(\d+)\]", raw_text)
+    parsed_id = match.group(1) if match else raw_text if raw_text.isdigit() else ""
+    if parsed_id and parsed_id in coeff_sets_by_id:
+        if allowed_ids is None or parsed_id in allowed_ids:
+            return parsed_id
+
+    for set_id, coeff_set in coeff_sets_by_id.items():
+        if allowed_ids is not None and set_id not in allowed_ids:
+            continue
+        set_name = str(coeff_set.get("name", "")).strip()
+        if raw_text == set_name or raw_text == get_coeff_set_label(coeff_set):
+            return set_id
+
+    return ""
 
 
 def ui_section_title(text: str) -> None:
@@ -509,6 +538,47 @@ def _to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 
 
+def build_planning_periods(start_month: int, start_year: int, horizon_months: int = 12) -> list[dict]:
+    periods = []
+    start_month = int(start_month)
+    start_year = int(start_year)
+    for slot in range(1, horizon_months + 1):
+        month_offset = slot - 1
+        month_num = ((start_month - 1 + month_offset) % 12) + 1
+        year = start_year + ((start_month - 1 + month_offset) // 12)
+        month_name_short = MONTH_NAMES_FULL[month_num]
+        month_name = f"{month_name_short} {year}"
+        periods.append(
+            {
+                "planning_slot": slot,
+                "month_num": month_num,
+                "month_year": year,
+                "month_name": month_name,
+                "month_name_short": month_name_short,
+                "period_label": f"{slot}. {month_name}",
+            }
+        )
+    return periods
+
+
+def sync_multiselect_state(key: str, valid_options: list[str], default_to_all: bool = True) -> list[str]:
+    current_values = [str(v) for v in st.session_state.get(key, [])]
+    valid_values = [value for value in current_values if value in valid_options]
+    if valid_values:
+        st.session_state[key] = valid_values
+    elif default_to_all:
+        st.session_state[key] = valid_options.copy()
+    else:
+        st.session_state[key] = []
+    return list(st.session_state[key])
+
+
+def calc_new_clients_share_pct(new_clients: float, client_count: float) -> float:
+    new_clients = float(new_clients or 0.0)
+    client_count = float(client_count or 0.0)
+    return (new_clients / client_count * 100.0) if client_count > 0 else 0.0
+
+
 def safe_select_columns(df: pd.DataFrame, columns: list[str], fill_value=np.nan) -> pd.DataFrame:
     work = df.copy()
     for col in columns:
@@ -546,6 +616,7 @@ def get_campaign_required_cols(metric_mode: dict) -> list[str]:
     if metric_mode.get("needs_aov"):
         required.append("aov_avg")
     if metric_mode.get("is_diy"):
+        required.append("reach_avg")
         required.append("cr2_avg_percent")
     elif metric_mode.get("is_real_estate_full"):
         required.append("cr2_avg_percent")
@@ -588,6 +659,91 @@ def get_real_estate_table_cols(metric_mode: dict) -> list[str]:
     return [
         "impressions", "clicks", "ctr_pct", "cpc", "cost", "cost_with_vat", "cost_with_vat_ak",
         "cr_pct", "target_leads", "cpql", "cpm",
+    ]
+
+
+def get_diy_plan_table_cols() -> list[str]:
+    return [
+        "cost",
+        "ak_cost_wo_vat",
+        "total_budget_wo_vat_ak",
+        "cost_with_vat",
+        "cost_with_vat_ak",
+        "vat_amount",
+        "ak_rate_pct",
+        "impressions",
+        "reach",
+        "frequency",
+        "clicks",
+        "cpc",
+        "ctr_pct",
+        "cr_pct",
+        "conversions",
+        "cpa",
+        "cpm",
+        "aov",
+        "revenue",
+        "drr_pct",
+        "ROAS",
+        "available_capacity",
+        "client_count",
+        "absolute_new_clients",
+        "returned_clients",
+        "new_clients",
+        "cac",
+        "order_frequency",
+        "shipped_orders",
+        "shipped_cps",
+        "shipped_aov",
+        "shipped_revenue",
+        "shipped_roas",
+        "shipped_drr_pct",
+        "shipped_order_share_segment_pct",
+        "shipped_revenue_share_segment_pct",
+        "sov_pct",
+        "new_clients_share_pct",
+        "order_share_segment_pct",
+        "revenue_share_segment_pct",
+        "budget_share_segment_pct",
+    ]
+
+
+def get_diy_display_metric_specs() -> list[tuple[str, str]]:
+    return [
+        ("Бюджет", "cost"),
+        ("АК без НДС", "ak_cost_wo_vat"),
+        ("Тотал бюджет без НДС с учетом АК", "total_budget_wo_vat_ak"),
+        ("Бюджет с НДС", "cost_with_vat"),
+        ("Бюджет с НДС и АК", "cost_with_vat_ak"),
+        ("НДС, ₽", "vat_amount"),
+        ("АК, %", "ak_rate_pct"),
+        ("Показы", "impressions"),
+        ("Клики", "clicks"),
+        ("CPC", "cpc"),
+        ("CTR", "ctr"),
+        ("CR", "cr"),
+        ("Конверсии", "conversions"),
+        ("CPO", "cpa"),
+        ("CPM", "cpm"),
+        ("AOV", "aov"),
+        ("Выручка", "revenue"),
+        ("ROAS", "roas"),
+        ("ДРР", "drr"),
+        ("Доступная емкость", "available_capacity"),
+        ("Количество клиентов", "client_count"),
+        ("Кол-во абсолютно новых клиентов", "absolute_new_clients"),
+        ("Кол-во вернувшихся клиентов", "returned_clients"),
+        ("Кол-во новых клиентов", "new_clients"),
+        ("CAC", "cac"),
+        ("Частота заказа", "order_frequency"),
+        ("Кол-во отгруженных заказов", "shipped_orders"),
+        ("Стоимость отгр. заказа, ₽ с НДС", "shipped_cps"),
+        ("Средний чек по выручке, с НДС", "shipped_aov"),
+        ("Выручка (отгруженный доход), ₽ с НДС", "shipped_revenue"),
+        ("ROAS отгр.", "shipped_roas"),
+        ("ДРР отгр., %", "shipped_drr_pct"),
+        ("SOV, %", "sov_pct"),
+        ("Доля новых клиентов, %", "new_clients_share_pct"),
     ]
 
 
@@ -653,8 +809,7 @@ def _bootstrap_reference_from_campaigns(campaigns_df: pd.DataFrame | None) -> No
         cpo = (budget_basis / conv) if conv > 0 else 0.0
         cpl = (budget_basis / leads) if leads > 0 else 0.0
         cpql = (budget_basis / target_leads) if target_leads > 0 else 0.0
-        roas_basis = cost_with_vat
-        roas = (rev / roas_basis) if roas_basis > 0 else 0.0
+        roas = (rev / budget_basis * 100.0) if budget_basis > 0 else 0.0
         drr = (budget_basis / rev * 100.0) if rev > 0 else 0.0
 
         base_by_campaign[camp] = {
@@ -701,7 +856,7 @@ def _bootstrap_reference_from_campaigns(campaigns_df: pd.DataFrame | None) -> No
         "cpc": float((total_cost / total_clicks) if total_clicks > 0 else 0.0),
         "cr": float((total_conv / total_clicks * 100.0) if total_clicks > 0 else 0.0),
         "cpo": float((total_budget_basis / total_conv) if total_conv > 0 else 0.0),
-        "roas": float((total_rev / total_cost_with_vat) if total_cost_with_vat > 0 else 0.0),
+        "roas": float((total_rev / total_budget_basis * 100.0) if total_budget_basis > 0 else 0.0),
         "drr": float((total_budget_basis / total_rev * 100.0) if total_rev > 0 else 0.0),
     }
 
@@ -742,6 +897,8 @@ def export_project_state_payload() -> dict:
             "ak_fixed_month_wo_vat": float(st.session_state.get("ak_fixed_month_wo_vat", 200000.0) or 0.0),
             "ak_fixed_percent": float(st.session_state.get("ak_fixed_percent", 2.0) or 0.0),
             "planning_months_multiselect": list(st.session_state.get("planning_months_multiselect", [])),
+            "planning_start_month": int(st.session_state.get("planning_start_month", 1) or 1),
+            "planning_start_year": int(st.session_state.get("planning_start_year", dt.date.today().year) or dt.date.today().year),
             "metric_preset_key": str(st.session_state.get("metric_preset_key", "ecom")),
             "real_estate_funnel_mode": str(st.session_state.get("real_estate_funnel_mode", "simple")),
         },
@@ -789,6 +946,8 @@ def import_project_state_payload(payload: dict) -> tuple[bool, str]:
     st.session_state["ak_fixed_month_wo_vat"] = float(state.get("ak_fixed_month_wo_vat", 200000.0) or 0.0)
     st.session_state["ak_fixed_percent"] = float(state.get("ak_fixed_percent", 2.0) or 0.0)
     st.session_state["planning_months_multiselect"] = list(state.get("planning_months_multiselect", []))
+    st.session_state["planning_start_month"] = int(state.get("planning_start_month", 1) or 1)
+    st.session_state["planning_start_year"] = int(state.get("planning_start_year", dt.date.today().year) or dt.date.today().year)
     preset_key = str(state.get("metric_preset_key", "ecom"))
     st.session_state["metric_preset_key"] = preset_key if preset_key in METRIC_PRESETS else "ecom"
     st.session_state["real_estate_funnel_mode"] = str(state.get("real_estate_funnel_mode", "simple"))
@@ -839,6 +998,86 @@ def make_ak_rules_signature(ak_rules_df: pd.DataFrame | None) -> tuple:
     work["ak_percent"] = work["ak_percent"].map(lambda v: round(parse_float_loose(v, 0.0), 4))
     work = work[["min_budget_wo_vat", "ak_percent"]].sort_values("min_budget_wo_vat", kind="stable")
     return tuple((float(r["min_budget_wo_vat"]), float(r["ak_percent"])) for _, r in work.iterrows())
+
+
+def make_vat_ak_settings_signature(
+    use_vat_budget_metrics: bool,
+    use_ak_budget_metrics: bool,
+    ak_mode: str,
+    ak_fixed_month_wo_vat: float,
+    ak_fixed_percent: float,
+    ak_rules_df: pd.DataFrame | None,
+) -> tuple:
+    return (
+        bool(use_vat_budget_metrics),
+        bool(use_ak_budget_metrics),
+        str(ak_mode),
+        round(float(ak_fixed_month_wo_vat), 4) if str(ak_mode) == "fixed" else None,
+        round(float(ak_fixed_percent), 4) if str(ak_mode) == "fixed_percent" else None,
+        make_ak_rules_signature(ak_rules_df) if str(ak_mode) == "percent" else tuple(),
+    )
+
+
+def normalize_ak_rules_df(ak_rules_df: pd.DataFrame | None) -> pd.DataFrame:
+    if ak_rules_df is None or not isinstance(ak_rules_df, pd.DataFrame):
+        return pd.DataFrame([{"min_budget_wo_vat": 0.0, "ak_percent": 0.0}])
+    work = ak_rules_df.copy()
+    for col in ["min_budget_wo_vat", "ak_percent"]:
+        if col not in work.columns:
+            work[col] = 0.0
+    work["min_budget_wo_vat"] = work["min_budget_wo_vat"].map(lambda v: parse_float_loose(v, 0.0))
+    work["ak_percent"] = work["ak_percent"].map(lambda v: parse_float_loose(v, 0.0))
+    work = work[["min_budget_wo_vat", "ak_percent"]].sort_values("min_budget_wo_vat", kind="stable").reset_index(drop=True)
+    if work.empty:
+        work = pd.DataFrame([{"min_budget_wo_vat": 0.0, "ak_percent": 0.0}])
+    return work
+
+
+def get_vat_ak_ui_config(metric_mode: dict, is_real_estate_preset: bool) -> dict:
+    ak_mode_options = [
+        ("percent", "Процент по шкале"),
+        ("fixed", "Фиксированная сумма в месяц"),
+        ("fixed_percent", "Фиксированный процент"),
+    ]
+    warning_text = (
+        "<b>Учитывать НДС 22% в расчетах</b>: настройка влияет на CPC, CPM, CPL и CPQL."
+        if is_real_estate_preset and metric_mode["is_real_estate_full"]
+        else "<b>Учитывать НДС 22% в расчетах</b>: настройка влияет на CPC, CPM и CPQL."
+        if is_real_estate_preset
+        else "<b>Учитывать НДС 22% в расчетах</b>: настройка влияет на CPC, CPM, CPO, ROAS и ДРР."
+    )
+    mode_label_by_value = {value: label for value, label in ak_mode_options}
+    mode_value_by_label = {label: value for value, label in ak_mode_options}
+    return {
+        "warning_text": warning_text,
+        "ak_mode_labels": [label for _, label in ak_mode_options],
+        "mode_label_by_value": mode_label_by_value,
+        "mode_value_by_label": mode_value_by_label,
+    }
+
+
+def get_vat_ak_apply_state(
+    use_vat_budget_metrics: bool,
+    use_ak_budget_metrics: bool,
+    ak_mode: str,
+    ak_fixed_month_wo_vat: float,
+    ak_fixed_percent: float,
+    ak_rules_df: pd.DataFrame | None,
+    last_applied_sig: tuple | None,
+) -> dict:
+    current_sig = make_vat_ak_settings_signature(
+        use_vat_budget_metrics=use_vat_budget_metrics,
+        use_ak_budget_metrics=use_ak_budget_metrics,
+        ak_mode=ak_mode,
+        ak_fixed_month_wo_vat=ak_fixed_month_wo_vat,
+        ak_fixed_percent=ak_fixed_percent,
+        ak_rules_df=ak_rules_df,
+    )
+    return {
+        "current_sig": current_sig,
+        "last_applied_sig": last_applied_sig,
+        "dirty": current_sig != last_applied_sig,
+    }
 
 
 def resolve_ak_rate(total_cost_wo_vat: float, ak_rules_df: pd.DataFrame) -> float:
@@ -948,9 +1187,10 @@ def render_bottom_tab_switcher(current_tab: str, key_suffix: str) -> None:
         f"""
         <div id="{nav_id}" class="bottom-tab-nav">
             <button type="button" class="bottom-tab-btn" data-tab-idx="0">Коэффициенты</button>
-            <button type="button" class="bottom-tab-btn" data-tab-idx="1">Медиаплан</button>
-            <button type="button" class="bottom-tab-btn" data-tab-idx="2">Диаграммы</button>
-            <button type="button" class="bottom-tab-btn" data-tab-idx="3">Export/Import</button>
+            <button type="button" class="bottom-tab-btn" data-tab-idx="1">Настройки расчета</button>
+            <button type="button" class="bottom-tab-btn" data-tab-idx="2">Медиаплан</button>
+            <button type="button" class="bottom-tab-btn" data-tab-idx="3">Диаграммы</button>
+            <button type="button" class="bottom-tab-btn" data-tab-idx="4">Export/Import</button>
         </div>
         """,
         unsafe_allow_html=True,
@@ -969,7 +1209,7 @@ def render_bottom_tab_switcher(current_tab: str, key_suffix: str) -> None:
 
             const topTabs = topmostTablist.querySelectorAll('button[role="tab"]');
             const navBtns = nav.querySelectorAll('.bottom-tab-btn');
-            if (!topTabs || topTabs.length < 4 || !navBtns.length) return;
+            if (!topTabs || topTabs.length < 5 || !navBtns.length) return;
 
             const syncActive = () => {{
                 let activeIdx = 0;
@@ -1021,33 +1261,32 @@ DISPLAY_COL_RENAME = {
     "impressions": "Показы",
     "reach": "Охват",
     "frequency": "Частота",
-    "ctr_pct": "CTR, %",
-    "ctr": "CTR, %",
-    "cpc": "CPC, руб.",
-    "cr_pct": "CR, %",
-    "cr": "CR, %",
-    "cr1_pct": "CR1 в лид, %",
-    "cr2_pct": "CR2 в ЦО, %",
+    "ctr_pct": "CTR",
+    "ctr": "CTR",
+    "cpc": "CPC",
+    "cr_pct": "CR",
+    "cr": "CR",
+    "cr1_pct": "CR1 в Лид",
+    "cr2_pct": "CR2 в ЦО",
     "aov": "AOV",
     "clicks": "Клики",
     "conversions": "Конверсии",
     "leads": "Лиды",
     "target_leads": "ЦО",
-    "cost": "Бюджет, руб. без НДС",
+    "cost": "Бюджет",
     "cost_with_vat": "Бюджет с НДС",
     "cost_with_vat_ak": "Бюджет с НДС и АК",
-    "ak_cost_wo_vat": "АК, руб. без НДС",
-    "total_budget_wo_vat_ak": "Тотал бюджет, руб. без НДС и с учетом АК",
-    "vat_amount": "НДС, руб.",
+    "ak_cost_wo_vat": "АК без НДС",
+    "total_budget_wo_vat_ak": "Тотал бюджет без НДС с учетом АК",
+    "vat_amount": "НДС, ₽",
     "ak_rate_pct": "АК, %",
-    "revenue": "Доход, руб.",
+    "revenue": "Доход",
     "cpm": "CPM",
     "cpa": "CPO",
     "cpl": "CPL",
     "cpql": "CPQL",
-    "roas": "ROAS",
-    "drr_pct": "ДРР, %",
-    "drr": "ДРР, %",
+    "drr_pct": "ДРР",
+    "drr": "ДРР",
     "ROAS": "ROAS",
     "sov_pct": "SOV, %",
     "available_capacity": "Доступная емкость",
@@ -1055,18 +1294,18 @@ DISPLAY_COL_RENAME = {
     "absolute_new_clients": "Кол-во абсолютно новых клиентов",
     "returned_clients": "Кол-во вернувшихся клиентов",
     "new_clients": "Кол-во новых клиентов",
-    "cac": "CAC, руб.",
+    "cac": "CAC",
     "order_frequency": "Частота заказа",
     "new_clients_share_pct": "Доля новых клиентов, %",
     "budget_share_segment_pct": "Доля рекламного бюджета, %",
     "order_share_segment_pct": "Доля заказов, %",
     "revenue_share_segment_pct": "Доля дохода, %",
     "shipped_orders": "Кол-во отгруженных заказов",
-    "shipped_cps": "Стоимость отгр. заказа, руб. с НДС",
+    "shipped_cps": "Стоимость отгр. заказа, ₽ с НДС",
     "shipped_order_share_segment_pct": "Доля отгр. заказов, %",
-    "shipped_revenue": "Выручка (отгруженный доход), руб. с НДС",
+    "shipped_revenue": "Выручка (отгруженный доход), ₽ с НДС",
     "shipped_roas": "ROAS отгр.",
-    "shipped_drr_pct": "ДРР от выручки, %",
+    "shipped_drr_pct": "ДРР отгр., %",
     "shipped_aov": "Средний чек по выручке, с НДС",
     "shipped_revenue_share_segment_pct": "Доля выручки, %",
 }
@@ -1076,33 +1315,33 @@ METRIC_HELP = {
     "reach": "Охват: число уникальных пользователей, увидевших рекламу.",
     "frequency": "Частота = Показы / Охват.",
     "clicks": "Клики: Показы × CTR.",
-    "ctr": "CTR, %",
-    "cpc": "CPC, ???.",
-    "cr": "CR, %",
+    "ctr": "CTR, % = Клики / Показы × 100%.",
+    "cpc": "CPC = Бюджет / Клики.",
+    "cr": "CR, % = Конверсии / Клики × 100%.",
     "aov": "AOV = Доход / Конверсии.",
     "conversions": "Конверсии = Клики × CR.",
-    "cost": "??????, ???. ??? ???",
-    "cost_with_vat": "?????? ? ???",
-    "cost_with_vat_ak": "?????? ? ??? ? ??",
-    "total_budget_wo_vat_ak": "????? ??????, ???. ??? ??? ? ? ?????? ??",
-    "vat_amount": "???, ???.",
-    "revenue": "?????",
+    "cost": "Бюджет = Клики × CPC.",
+    "cost_with_vat": "Бюджет с НДС = Бюджет × 1.22 (при включенном учете НДС).",
+    "cost_with_vat_ak": "Бюджет с НДС и АК = (Бюджет + АК без НДС) × 1.22.",
+    "total_budget_wo_vat_ak": "Тотал бюджет без НДС с учетом АК = Бюджет + АК без НДС.",
+    "vat_amount": "НДС, ₽ = Тотал бюджет с НДС и АК - Тотал бюджет без НДС и АК.",
+    "revenue": "Доход = Конверсии × AOV.",
     "client_count": "Количество клиентов: базовое значение по типу РК, к которому применяется месячный коэффициент.",
     "absolute_new_clients": "Абсолютно новые клиенты: базовое значение по типу РК, к которому применяется месячный коэффициент.",
     "returned_clients": "Вернувшиеся клиенты: базовое значение по типу РК, к которому применяется месячный коэффициент.",
     "new_clients": "Новые клиенты = Абсолютно новые клиенты + Вернувшиеся клиенты.",
-    "cac": "CAC, ???.",
+    "cac": "CAC = Бюджет с НДС и АК / Кол-во новых клиентов.",
     "order_frequency": "Частота заказа: базовое значение по типу РК, к которому применяется месячный коэффициент.",
     "shipped_orders": "Отгруженные заказы = Оформленные заказы × CR2.",
-    "shipped_cps": "????????? ????. ??????, ???. ? ???",
-    "shipped_revenue": "??????? (??????????? ?????), ???. ? ???",
-    "shipped_roas": "ROAS отгр. = Отгруженный доход / Бюджет с НДС и АК.",
-    "shipped_drr_pct": "??? ?? ???????, %",
-    "shipped_aov": "??????? ??? ?? ???????, ? ???",
+    "shipped_cps": "Стоимость отгр. заказа, ₽ с НДС = Бюджет с НДС / Кол-во отгруженных заказов.",
+    "shipped_revenue": "Отгруженный доход = Кол-во отгруженных заказов × Средний чек.",
+    "shipped_roas": "ROAS отгр. = Отгруженный доход / Бюджетная база.",
+    "shipped_drr_pct": "ДРР отгр., % = Бюджетная база / Отгруженный доход × 100%.",
+    "shipped_aov": "Средний чек по выручке, с НДС = Отгруженный доход / Кол-во отгруженных заказов.",
     "cpm": "CPM = Бюджетная база / (Показы / 1000). База зависит от режима НДС.",
     "cpo": "CPO = Бюджетная база / Конверсии. База зависит от режима НДС.",
-    "roas": "ROAS = Доход / Бюджет с НДС и АК.",
-    "drr": "???, %",
+    "roas": "ROAS, % = Доход / Бюджетная база × 100%. База зависит от режима НДС.",
+    "drr": "ДРР, % = Бюджетная база / Доход × 100%. База зависит от режима НДС.",
     "k_imp": "k_imp: коэффициент показов. Применяется к Показы.",
     "k_reach": "k_reach: коэффициент охвата. Применяется к Охват.",
     "k_ctr": "k_ctr: коэффициент CTR. Применяется к CTR.",
@@ -1115,7 +1354,7 @@ METRIC_HELP = {
     "k_order_frequency": "k_order_frequency: коэффициент частоты заказа.",
     "cpc_div": "Делитель влияния на CPC: k_cpc = 1 + (k_demand - 1) / div.",
     "ctr_div": "Делитель влияния на CTR: k_ctr = 1 - (k_demand - 1) / div.",
-    "cr_div": "Делитель влияния на CR/CR1: k_cr = 1 - (k_demand - 1) / div.",
+    "cr_div": "Делитель влияния на CR: k_cr = 1 - (k_demand - 1) / div.",
 }
 
 
@@ -1217,125 +1456,6 @@ def add_segment_value_share(
     seg_total = values.groupby(out[segment_col]).transform("sum")
     out[out_col] = np.where(seg_total > 0, values / seg_total * 100.0, 0.0)
     return out
-
-
-def get_diy_grouped_display_cols(primary_col: str, include_context: bool = True) -> list[str]:
-    cols = [primary_col]
-    if include_context:
-        cols += ["system", "format", "geo", "segment"]
-    cols += [
-        "cost",
-        "ak_rate_pct",
-        "ak_cost_wo_vat",
-        "total_budget_wo_vat_ak",
-        "cost_with_vat_ak",
-        "vat_amount",
-        "budget_share_segment_pct",
-        "impressions",
-        "available_capacity",
-        "client_count",
-        "absolute_new_clients",
-        "returned_clients",
-        "new_clients",
-        "new_clients_share_pct",
-        "order_frequency",
-        "cac",
-        "ctr_pct",
-        "clicks",
-        "cpc",
-        "cr_pct",
-        "conversions",
-        "cpa",
-        "order_share_segment_pct",
-        "ROAS",
-        "drr_pct",
-        "aov",
-        "revenue",
-        "revenue_share_segment_pct",
-        "cr2_pct",
-        "shipped_orders",
-        "shipped_cps",
-        "shipped_order_share_segment_pct",
-        "shipped_roas",
-        "shipped_drr_pct",
-        "shipped_aov",
-        "shipped_revenue",
-        "shipped_revenue_share_segment_pct",
-    ]
-    return cols
-
-
-def get_diy_grouped_agg_cols(primary_col: str = "month_name") -> list[str]:
-    return [
-        primary_col,
-        "cost",
-        "ak_rate_pct",
-        "ak_cost_wo_vat",
-        "total_budget_wo_vat_ak",
-        "cost_with_vat_ak",
-        "vat_amount",
-        "budget_share_segment_pct",
-        "impressions",
-        "available_capacity",
-        "client_count",
-        "absolute_new_clients",
-        "returned_clients",
-        "new_clients",
-        "new_clients_share_pct",
-        "order_frequency",
-        "cac",
-        "ctr",
-        "clicks",
-        "cpc",
-        "cr",
-        "conversions",
-        "cpa",
-        "order_share_segment_pct",
-        "roas",
-        "drr",
-        "aov",
-        "revenue",
-        "revenue_share_segment_pct",
-        "cr2_pct",
-        "shipped_orders",
-        "shipped_cps",
-        "shipped_order_share_segment_pct",
-        "shipped_roas",
-        "shipped_drr_pct",
-        "shipped_aov",
-        "shipped_revenue",
-        "shipped_revenue_share_segment_pct",
-    ]
-
-
-def apply_diy_block_styling(styler: "Styler", columns: list[str]):
-    blocks = [
-        ("budget", ["cost", "ak_rate_pct", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "cost_with_vat", "cost_with_vat_ak", "vat_amount", "budget_share_segment_pct"], "#17304A"),
-        ("clients", ["impressions", "available_capacity", "new_clients_share_pct", "client_count", "absolute_new_clients", "returned_clients", "new_clients", "order_frequency", "cac"], "#14353A"),
-        ("orders", ["ctr_pct", "ctr", "clicks", "cpc", "cr_pct", "cr", "conversions", "cpa", "order_share_segment_pct", "ROAS", "roas", "drr_pct", "drr", "aov", "revenue", "revenue_share_segment_pct"], "#2C2947"),
-        ("shipped", ["cr2_pct", "shipped_orders", "shipped_cps", "shipped_order_share_segment_pct", "shipped_roas", "shipped_drr_pct", "shipped_aov", "shipped_revenue", "shipped_revenue_share_segment_pct"], "#3A2638"),
-    ]
-    table_styles = []
-    col_idx_map = {col: idx for idx, col in enumerate(columns)}
-    body_styles = pd.DataFrame("", index=styler.data.index, columns=styler.data.columns)
-    for _, raw_cols, header_bg in blocks:
-        display_cols = [DISPLAY_COL_RENAME.get(col, col) if col != "ROAS" and col != "roas" else "ROAS" for col in raw_cols]
-        display_cols = [col for col in display_cols if col in col_idx_map]
-        display_cols = list(dict.fromkeys(display_cols))
-        if not display_cols:
-            continue
-        first_col = display_cols[0]
-        for col in display_cols:
-            body_styles.loc[:, col] = body_styles.loc[:, col] + f"border-right: 1px solid {THEME_BORDER};"
-        body_styles.loc[:, first_col] = body_styles.loc[:, first_col] + f"border-left: 3px solid {THEME_BORDER};"
-        for col in display_cols:
-            idx = col_idx_map[col]
-            props = [("background-color", header_bg), ("color", "#EAF0FF"), ("border-bottom", f"1px solid {THEME_BORDER}")]
-            if col == first_col:
-                props.append(("border-left", f"3px solid {THEME_BORDER}"))
-            table_styles.append({"selector": f"th.col_heading.level0.col{idx}", "props": props})
-    styler = styler.apply(lambda _: body_styles, axis=None)
-    return styler.set_table_styles(table_styles, overwrite=False)
 
 
 def forecast_ets_like(
@@ -1460,7 +1580,7 @@ TEMPLATE_PATHS_BY_KIND = {
 
 def build_excel_from_template(df_all: pd.DataFrame,
                               campaigns: pd.DataFrame,
-                              selected_month_nums: list[int],
+                              selected_periods: list[dict],
                               template_kind: str = "ecom",
                               compact_empty_rows: bool = True) -> BytesIO:
 
@@ -1770,14 +1890,18 @@ def build_excel_from_template(df_all: pd.DataFrame,
         b2b_rows = list(range(row_b2c_total + 1, row_b2b_total))
         return b2c_rows, b2b_rows
 
-    year = dt.date.today().year
-
-    for block_index, month_num in enumerate(selected_month_nums):
+    for block_index, period in enumerate(selected_periods):
+        month_num = int(period.get("month_num", 1) or 1)
+        year = int(period.get("month_year", dt.date.today().year) or dt.date.today().year)
+        planning_slot = int(period.get("planning_slot", block_index + 1) or (block_index + 1))
         block_start_row = START_ROW_JAN + block_index * BLOCK_STEP
         start = dt.date(year, month_num, 1)
         end = dt.date(year, 12, 31) if month_num == 12 else dt.date(year, month_num + 1, 1) - dt.timedelta(days=1)
         period_str = f"{start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}"
-        df_month = df_all[df_all["month_num"] == month_num]
+        if "planning_slot" in df_all.columns:
+            df_month = df_all[df_all["planning_slot"] == planning_slot]
+        else:
+            df_month = df_all[df_all["month_num"] == month_num]
 
         diy_period_rows = _collect_diy_period_rows(block_start_row) if (template_kind == "diy" and "segment" in campaigns.columns) else None
 
@@ -1811,7 +1935,7 @@ def build_excel_from_template(df_all: pd.DataFrame,
 
     if compact_empty_rows:
         rows_to_hide_periods = []
-        for block_index, _ in enumerate(selected_month_nums):
+        for block_index, _ in enumerate(selected_periods):
             block_start_row = START_ROW_JAN + block_index * BLOCK_STEP
             for i in range(ROWS_PER_MONTH):
                 row_excel = block_start_row + i
@@ -2046,16 +2170,17 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab_coeffs, tab_plan, tab_charts, tab_export = st.tabs(
-    ["Коэффициенты", "Медиаплан", "Диаграммы", "Export/Import"]
+tab_coeffs, tab_setup, tab_plan, tab_charts, tab_export = st.tabs(
+    ["Коэффициенты", "Настройки расчета", "Медиаплан", "Диаграммы", "Export/Import"]
 )
 if top_header_uri:
     header_tab_bg_map_json = json.dumps(
         {
             0: coeff_header_uri or "",
             1: plan_header_uri or "",
-            2: charts_header_uri or "",
-            3: export_header_uri or "",
+            2: plan_header_uri or "",
+            3: charts_header_uri or "",
+            4: export_header_uri or "",
         },
         ensure_ascii=False,
     )
@@ -2066,9 +2191,10 @@ if top_header_uri:
             const TAB_BG_MAP = __TAB_BG_MAP__;
             const VISIBLE_OPACITY = "1.00";
             const COEFF_TAB_INDEX = 0;
-            const PLAN_TAB_INDEX = 1;
-            const CHARTS_TAB_INDEX = 2;
-            const EXPORT_TAB_INDEX = 3;
+            const SETUP_TAB_INDEX = 1;
+            const PLAN_TAB_INDEX = 2;
+            const CHARTS_TAB_INDEX = 3;
+            const EXPORT_TAB_INDEX = 4;
             const BASE_BG_POSITION = "calc(100% - 20px) center";
             const COEFF_BG_POSITION = "calc(100% + 95px) calc(50% + 77px)";
             const PLAN_BG_POSITION = "calc(100% + 120px) center";
@@ -2107,6 +2233,9 @@ if top_header_uri:
                 if (activeIdx === COEFF_TAB_INDEX) {
                     bg.style.backgroundSize = "52% auto";
                     bg.style.backgroundPosition = COEFF_BG_POSITION;
+                } else if (activeIdx === SETUP_TAB_INDEX) {
+                    bg.style.backgroundSize = "58% auto";
+                    bg.style.backgroundPosition = PLAN_BG_POSITION;
                 } else if (activeIdx === PLAN_TAB_INDEX) {
                     bg.style.backgroundSize = "58% auto";
                     bg.style.backgroundPosition = PLAN_BG_POSITION;
@@ -2206,7 +2335,7 @@ with tab_coeffs:
         "для «Медийных хвостов» — обратитесь к специалистам по медийной рекламе для расчета влияния."
     )
 
-    # ---------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦ ----------------
+    # ---------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------------
 
     def generate_months_list(start_month: int, start_year: int, count: int = 24):
         month_names = [
@@ -2324,7 +2453,7 @@ with tab_coeffs:
 
         return pd.DataFrame(rows)
 
-    # ---------------- НЦАЛЗАЦЯ СОСТОЯНЯ ----------------
+    # ---------------- ИНИЦИАЛИЗАЦИЯ СОСТОЯНИЯ ----------------
 
     if "coeff_sets" not in st.session_state:
         st.session_state["coeff_sets"] = []
@@ -2459,10 +2588,10 @@ with tab_coeffs:
                     else f"Текущий период: {int(cs['period_months'])} мес. ({period_years:.1f} г.)"
                 )
 
-                # ---- 4. нтерфейс в зависимости от типа набора ----
+                # ---- 4. Интерфейс в зависимости от типа набора ----
 
                 if cs["type"] == "Спрос (по запросам)":
-                    # ===== РЕЖМ СПРОС (ПО ЗАПРОСАМ) =====
+                    # ===== РЕЖИМ СПРОС (ПО ЗАПРОСАМ) =====
                     st.markdown("**Поисковые запросы:**")
 
                     if not cs.get("queries"):
@@ -2520,7 +2649,7 @@ with tab_coeffs:
                             st.markdown("**Заполните данные (можно копировать из Excel через Ctrl+C → Ctrl+V):**")
                             df_edit = st.data_editor(
                                 cs["df_data"],
-                                use_container_width=True,
+                                width="stretch",
                                 row_height=ui_editor_row_height,
                                 num_rows="fixed",
                                 column_config={
@@ -2544,12 +2673,12 @@ with tab_coeffs:
                         with demand_right:
                             st.markdown("**Итоговые коэффициенты спроса**")
                             if cs.get("result") is not None:
-                                st.dataframe(cs["result"], use_container_width=True, height=420)
+                                st.dataframe(cs["result"], width="stretch", height=420)
                             else:
                                 st.info("После расчёта здесь появится итоговая таблица со средневзвешенными значениями и коэффициентами по месяцам.")
 
                 elif cs["type"] == "AOV (средний чек)":
-                    # ===== РЕЖМ AOV (СРЕДНЙ ЧЕК) =====
+                    # ===== РЕЖИМ AOV (СРЕДНИЙ ЧЕК) =====
                     st.markdown("**Данные по среднему чеку (AOV):**")
                     st.caption(
                         f"Для каждого месяца выбранного периода укажите средний чек (AOV). Сейчас: {int(cs.get('period_months', 24) or 24)} мес."
@@ -2573,7 +2702,7 @@ with tab_coeffs:
                             st.markdown("**Заполните AOV (средний чек) по месяцам:**")
                             df_edit = st.data_editor(
                                 cs["df_data"],
-                                use_container_width=True,
+                                width="stretch",
                                 row_height=ui_editor_row_height,
                                 num_rows="fixed",
                                 column_config={
@@ -2596,11 +2725,11 @@ with tab_coeffs:
                         with aov_right:
                             st.markdown("**Итоговые коэффициенты AOV**")
                             if cs.get("result") is not None:
-                                st.dataframe(cs["result"], use_container_width=True, height=420)
+                                st.dataframe(cs["result"], width="stretch", height=420)
                             else:
                                 st.info("После расчета здесь появится итоговая таблица коэффициентов.")
                 elif cs["type"] == "Кастомный набор":
-                    # ===== РЕЖМ КАСТОМНЫЙ НАБОР =====
+                    # ===== РЕЖИМ КАСТОМНЫЙ НАБОР =====
                     st.markdown("**Кастомные коэффициенты на 12 месяцев:**")
                     st.caption(
                         "Заполните коэффициенты вручную. Этот набор можно использовать и для спроса, и для AOV."
@@ -2622,15 +2751,18 @@ with tab_coeffs:
                                 "month_num": list(range(1, 13)),
                                 "Месяц": [month_names_map[m] for m in range(1, 13)],
                                 "Коэф.": [1.0] * 12,
-                                "Коэф. AOV": [1.0] * 12,
                             }
                         )
+                    elif "Коэф. AOV" in cs["df_data"].columns:
+                        custom_df = cs["df_data"].copy()
+                        custom_df = custom_df.drop(columns=["Коэф. AOV"], errors="ignore")
+                        cs["df_data"] = custom_df
 
                     custom_left, custom_right = st.columns([1.65, 1.0], vertical_alignment="top")
                     with custom_left:
                         df_edit = st.data_editor(
                             cs["df_data"],
-                            use_container_width=True,
+                            width="stretch",
                             row_height=ui_editor_row_height,
                             num_rows="fixed",
                             column_config={
@@ -2651,16 +2783,8 @@ with tab_coeffs:
                             df_coeffs = df_edit.copy()
                             if "Коэф." not in df_coeffs.columns:
                                 df_coeffs["Коэф."] = 1.0
-                            if "month_num" not in df_coeffs.columns:
-                                df_coeffs["month_num"] = list(range(1, len(df_coeffs) + 1))
-                            if "Месяц" not in df_coeffs.columns:
-                                df_coeffs["Месяц"] = [
-                                    month_names_map.get(int(m), str(m))
-                                    for m in pd.to_numeric(df_coeffs["month_num"], errors="coerce").fillna(0).astype(int)
-                                ]
                             df_coeffs["Номер месяца"] = df_coeffs["month_num"].astype(int)
-                            df_coeffs["Коэф. AOV"] = df_coeffs["Коэф."].astype(float)
-                            df_coeffs = df_coeffs[["Номер месяца", "Месяц", "Коэф.", "Коэф. AOV"]]
+                            df_coeffs = df_coeffs[["Номер месяца", "Месяц", "Коэф."]]
                             cs["result"] = df_coeffs
                             st.success("Кастомные коэффициенты сохранены!")
                         else:
@@ -2696,7 +2820,7 @@ with tab_coeffs:
                     with media_left:
                         df_edit = st.data_editor(
                             cs["df_data"],
-                            use_container_width=True,
+                            width="stretch",
                             row_height=ui_editor_row_height,
                             num_rows="fixed",
                             column_config={
@@ -2726,7 +2850,7 @@ with tab_coeffs:
                     cs_type_norm = normalize_coeff_set_type(cs.get("type"))
                     if cs_type_norm == "Спрос (по запросам)":
                         st.markdown("### Итоговые коэффициенты")
-                        st.dataframe(cs["result"], use_container_width=True)
+                        st.dataframe(cs["result"], width="stretch")
 
                     buf = io.BytesIO()
                     sheet_name = (cs["name"] or "Коэффициенты")[:31]
@@ -2744,10 +2868,10 @@ with tab_coeffs:
                     )
     render_bottom_tab_switcher("Коэффициенты", "coeffs")
 # ====================================================================
-#                           ТАБ «МЕДАПЛАН»
+#                      ТАБ «НАСТРОЙКИ РАСЧЕТА»
 # ====================================================================
 
-with tab_plan:
+with tab_setup:
     st.markdown(
         """
         <div class="tab-intro">
@@ -2757,9 +2881,8 @@ with tab_plan:
             <p>4) При необходимости настройте учет <b>НДС</b> и <b>АК</b>: можно включить НДС, задать фиксированную АК на месяц или использовать шкалу АК от TOTAL бюджета месяца без НДС.</p>
             <p>5) Назначьте для каждого типа РК наборы коэффициентов: <b>Спрос</b>, <b>AOV</b>, <b>Кастомный набор</b> и при необходимости <b>Медийные хвосты</b>. Для пресета <b>Недвижимость</b> набор <b>AOV</b> не используется.</p>
             <p>6) Настройте эластичность метрик к сезонности спроса: можно выбрать пресет настроек или задать значения вручную для <b>CPC</b>, <b>CTR</b> и <b>CR</b>.</p>
-            <p>7) Проверьте расчеты по каждому месяцу: слева показаны результаты, справа примененные коэффициенты. Коэффициенты справа редактируемые, поэтому изменения можно вносить прямо в ячейки и сразу смотреть на результат.</p>
-            <p>8) Опционально используйте левое меню «Быстрая сверка», чтобы закрепить перед глазами средний месяц или TOTAL выбранных месяцев и удобнее сравнивать данные при редактировании.</p>
-            <p>9) Сверьте итоги в блоке TOTAL по выбранным месяцам и при необходимости скорректируйте настройки.</p>
+            <p>7) Проверьте базовый «Средний месяц»: он служит опорой для дальнейшей помесячной работы.</p>
+            <p>8) После проверки базы переходите во вкладку «Медиаплан» для работы по месяцам и сверки TOTAL.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2810,20 +2933,7 @@ with tab_plan:
         ak_rules_df = st.session_state["ak_rules_df"]
         st.session_state["ak_rules_editor_nonce"] = int(st.session_state.get("ak_rules_editor_nonce", 0)) + 1
 
-    month_names_full = {
-        1: "Январь",
-        2: "Февраль",
-        3: "Март",
-        4: "Апрель",
-        5: "Май",
-        6: "Июнь",
-        7: "Июль",
-        8: "Август",
-        9: "Сентябрь",
-        10: "Октябрь",
-        11: "Ноябрь",
-        12: "Декабрь",
-    }
+    month_names_full = MONTH_NAMES_FULL.copy()
 
     def _fmt_ref_int(v: float) -> str:
         return f"{int(round(v)):,}".replace(",", " ")
@@ -2838,7 +2948,53 @@ with tab_plan:
         return f"{float(v):.2f}%"
 
     def _fmt_ref_roas(v: float) -> str:
-        return f"{float(v):.2f}"
+        return f"{float(v):.2f}%"
+
+    def _build_ref_df(ref: dict) -> pd.DataFrame:
+        if not ref:
+            return pd.DataFrame(columns=["Показатель", "Значение"])
+        if is_real_estate_preset:
+            rows = [
+                {"Показатель": "Показы", "Значение": _fmt_ref_int(ref.get("impressions", 0.0))},
+                {"Показатель": "Клики", "Значение": _fmt_ref_int(ref.get("clicks", 0.0))},
+                {"Показатель": "Бюджет", "Значение": _fmt_ref_rub(ref.get("cost", 0.0))},
+                {"Показатель": "Бюджет с НДС", "Значение": _fmt_ref_rub(ref.get("cost_with_vat", 0.0))},
+                {"Показатель": "Бюджет с НДС и АК", "Значение": _fmt_ref_rub(ref.get("cost_with_vat_ak", 0.0))},
+                {"Показатель": "CTR", "Значение": _fmt_ref_pct(ref.get("ctr", 0.0))},
+                {"Показатель": "CPC", "Значение": _fmt_ref_rub2(ref.get("cpc", 0.0))},
+            ]
+            if metric_mode["is_real_estate_full"]:
+                rows += [
+                    {"Показатель": "CR1 в Лид", "Значение": _fmt_ref_pct(ref.get("cr1", 0.0))},
+                    {"Показатель": "Лиды", "Значение": _fmt_ref_int(ref.get("leads", 0.0))},
+                    {"Показатель": "CPL", "Значение": _fmt_ref_rub(ref.get("cpl", 0.0))},
+                    {"Показатель": "CR2 в ЦО", "Значение": _fmt_ref_pct(ref.get("cr2", 0.0))},
+                    {"Показатель": "ЦО", "Значение": _fmt_ref_int(ref.get("target_leads", ref.get("conversions", 0.0)))},
+                    {"Показатель": "CPQL", "Значение": _fmt_ref_rub(ref.get("cpql", 0.0))},
+                ]
+            else:
+                rows += [
+                    {"Показатель": "CR в ЦО", "Значение": _fmt_ref_pct(ref.get("cr", 0.0))},
+                    {"Показатель": "ЦО", "Значение": _fmt_ref_int(ref.get("target_leads", ref.get("conversions", 0.0)))},
+                    {"Показатель": "CPQL", "Значение": _fmt_ref_rub(ref.get("cpql", ref.get("cpo", 0.0)))},
+                ]
+        else:
+            rows = [
+                {"Показатель": "Показы", "Значение": _fmt_ref_int(ref.get("impressions", 0.0))},
+                {"Показатель": "Клики", "Значение": _fmt_ref_int(ref.get("clicks", 0.0))},
+                {"Показатель": "Конверсии", "Значение": _fmt_ref_int(ref.get("conversions", 0.0))},
+                {"Показатель": "Бюджет", "Значение": _fmt_ref_rub(ref.get("cost", 0.0))},
+                {"Показатель": "Бюджет с НДС", "Значение": _fmt_ref_rub(ref.get("cost_with_vat", 0.0))},
+                {"Показатель": "Бюджет с НДС и АК", "Значение": _fmt_ref_rub(ref.get("cost_with_vat_ak", 0.0))},
+                {"Показатель": "Доход", "Значение": _fmt_ref_rub(ref.get("revenue", 0.0))},
+                {"Показатель": "CTR", "Значение": _fmt_ref_pct(ref.get("ctr", 0.0))},
+                {"Показатель": "CPC", "Значение": _fmt_ref_rub2(ref.get("cpc", 0.0))},
+                {"Показатель": "CR", "Значение": _fmt_ref_pct(ref.get("cr", 0.0))},
+                {"Показатель": "CPO", "Значение": _fmt_ref_rub(ref.get("cpo", 0.0))},
+                {"Показатель": "ROAS", "Значение": _fmt_ref_roas(ref.get("roas", 0.0))},
+                {"Показатель": "ДРР", "Значение": _fmt_ref_pct(ref.get("drr", 0.0))},
+            ]
+        return pd.DataFrame(rows)
 
     # ---------- 0. Горизонт планирования ----------
 
@@ -2848,10 +3004,34 @@ with tab_plan:
         "и данные на вкладке «Диаграммы»."
     )
 
-    all_month_nums = list(month_names_full.keys())
-    all_month_labels = [f"{i}. {month_names_full[i]}" for i in all_month_nums]
-    if "planning_months_multiselect" not in st.session_state:
-        st.session_state["planning_months_multiselect"] = all_month_labels.copy()
+    if "planning_start_month" not in st.session_state:
+        st.session_state["planning_start_month"] = 1
+    if "planning_start_year" not in st.session_state:
+        st.session_state["planning_start_year"] = dt.date.today().year
+    period_col_month, period_col_year, _period_sp = st.columns([1.2, 1.0, 2.8], vertical_alignment="bottom")
+    with period_col_month:
+        planning_start_month = int(
+            st.selectbox(
+                "Стартовый месяц периода:",
+                options=list(month_names_full.keys()),
+                index=list(month_names_full.keys()).index(int(st.session_state.get("planning_start_month", 1))),
+                format_func=lambda m: month_names_full.get(int(m), str(m)),
+                key="planning_start_month",
+            )
+        )
+    with period_col_year:
+        planning_start_year = int(
+            st.number_input(
+                "Стартовый год:",
+                min_value=2000,
+                max_value=2100,
+                step=1,
+                key="planning_start_year",
+            )
+        )
+    planning_periods = build_planning_periods(planning_start_month, planning_start_year, horizon_months=12)
+    all_month_labels = [p["period_label"] for p in planning_periods]
+    sync_multiselect_state("planning_months_multiselect", all_month_labels, default_to_all=True)
 
     selected_month_labels = st.multiselect(
         "Выберите месяцы, для которых считать медиаплан:",
@@ -2861,11 +3041,15 @@ with tab_plan:
 
     plan_calc_blockers = []
     if not selected_month_labels:
-        st.warning("Выберите хотя бы один месяц для расчета медиаплана.")
+        st.warning("Выберите хотя бы один месяц для расчёта медиаплана.")
         plan_calc_blockers.append("не выбраны месяцы планирования")
 
-    selected_month_nums = [int(label.split(".")[0]) for label in selected_month_labels] if selected_month_labels else []
-    months_count = len(selected_month_nums)
+    planning_periods_by_label = {p["period_label"]: p for p in planning_periods}
+    selected_periods = [planning_periods_by_label[label] for label in selected_month_labels if label in planning_periods_by_label]
+    selected_periods_by_slot = {int(p["planning_slot"]): p for p in selected_periods}
+    selected_month_nums = [int(p["month_num"]) for p in selected_periods]
+    selected_planning_slots = [int(p["planning_slot"]) for p in selected_periods]
+    months_count = len(selected_periods)
 
     ui_section_title("0.1 Пресет метрик")
     st.caption(
@@ -2901,101 +3085,36 @@ with tab_plan:
                 key="real_estate_funnel_mode",
             )
         metric_mode = get_metric_mode(active_preset_key, selected_re_mode)
-
-    if is_diy_preset:
-        DISPLAY_COL_RENAME["conversions"] = "Кол-во оформленных заказов"
-        DISPLAY_COL_RENAME["cr"] = "CR1, %"
-        DISPLAY_COL_RENAME["cr_pct"] = "CR1, %"
-        DISPLAY_COL_RENAME["revenue"] = "Оформленный доход, руб. с НДС"
-        DISPLAY_COL_RENAME["aov"] = "Средний чек по оформл. доходу, с НДС"
-        DISPLAY_COL_RENAME["cpa"] = "Стоимость оформл. заказа, руб. с НДС"
-        DISPLAY_COL_RENAME["ROAS"] = "ROAS оформл."
-        DISPLAY_COL_RENAME["drr"] = "ДРР от оформл. дохода, %"
-        DISPLAY_COL_RENAME["drr_pct"] = "ДРР от оформл. дохода, %"
-        DISPLAY_COL_RENAME["cr2_pct"] = "CR2, %"
-        DISPLAY_COL_RENAME["target_leads"] = "Кол-во отгруженных заказов"
-        DISPLAY_COL_RENAME["cpql"] = "Стоимость отгр. заказа, руб. с НДС"
-    elif is_real_estate_preset:
         DISPLAY_COL_RENAME["conversions"] = "ЦО"
         DISPLAY_COL_RENAME["target_leads"] = "ЦО"
         DISPLAY_COL_RENAME["revenue"] = "Выручка"
-        DISPLAY_COL_RENAME["cr"] = "CR в ЦО, %"
-        DISPLAY_COL_RENAME["cr_pct"] = "CR в ЦО, %"
-        DISPLAY_COL_RENAME["cpa"] = "CPQL"
+        if metric_mode["is_real_estate_full"]:
+            DISPLAY_COL_RENAME["cr"] = "CR в ЦО"
+            DISPLAY_COL_RENAME["cr_pct"] = "CR в ЦО"
+            DISPLAY_COL_RENAME["cpa"] = "CPQL"
+        else:
+            DISPLAY_COL_RENAME["cr"] = "CR в ЦО"
+            DISPLAY_COL_RENAME["cr_pct"] = "CR в ЦО"
+            DISPLAY_COL_RENAME["cpa"] = "CPQL"
+    elif is_diy_preset:
+        DISPLAY_COL_RENAME["conversions"] = "Кол-во оформленных заказов"
+        DISPLAY_COL_RENAME["cr"] = "CR1"
+        DISPLAY_COL_RENAME["cr_pct"] = "CR1"
+        DISPLAY_COL_RENAME["revenue"] = "Оформленный доход, ₽ с НДС"
+        DISPLAY_COL_RENAME["aov"] = "Средний чек по оформл. доходу, с НДС"
+        DISPLAY_COL_RENAME["cpa"] = "Стоимость оформл. заказа, ₽ с НДС"
+        DISPLAY_COL_RENAME["ROAS"] = "ROAS оформл."
+        DISPLAY_COL_RENAME["drr"] = "ДРР от оформл. дохода, %"
+        DISPLAY_COL_RENAME["drr_pct"] = "ДРР от оформл. дохода, %"
+        DISPLAY_COL_RENAME["cr2_pct"] = "CR2"
+        DISPLAY_COL_RENAME["target_leads"] = "Кол-во отгруженных заказов"
+        DISPLAY_COL_RENAME["cpql"] = "Стоимость отгр. заказа, ₽ с НДС"
     else:
         DISPLAY_COL_RENAME["conversions"] = "Конверсии"
-        DISPLAY_COL_RENAME["cr"] = "CR, %"
-        DISPLAY_COL_RENAME["cr_pct"] = "CR, %"
-        DISPLAY_COL_RENAME["revenue"] = "Доход, руб."
-        DISPLAY_COL_RENAME["aov"] = "AOV"
+        DISPLAY_COL_RENAME["cr"] = "CR"
+        DISPLAY_COL_RENAME["cr_pct"] = "CR"
+        DISPLAY_COL_RENAME["revenue"] = "Доход"
         DISPLAY_COL_RENAME["cpa"] = "CPO"
-        DISPLAY_COL_RENAME["ROAS"] = "ROAS"
-        DISPLAY_COL_RENAME["drr"] = "ДРР, %"
-        DISPLAY_COL_RENAME["drr_pct"] = "ДРР, %"
-        DISPLAY_COL_RENAME["cr2_pct"] = "CR2 в ЦО, %"
-        DISPLAY_COL_RENAME["target_leads"] = "ЦО"
-        DISPLAY_COL_RENAME["cpql"] = "CPQL"
-
-    def _build_ref_df(ref: dict) -> pd.DataFrame:
-        if not ref:
-            return pd.DataFrame(columns=["Показатель", "Значение"])
-        if is_real_estate_preset:
-            rows = [
-                {"Показатель": "Показы", "Значение": _fmt_ref_int(ref.get("impressions", 0.0))},
-                {"Показатель": "Клики", "Значение": _fmt_ref_int(ref.get("clicks", 0.0))},
-                {"Показатель": "Бюджет", "Значение": _fmt_ref_rub(ref.get("cost", 0.0))},
-                {"Показатель": "Бюджет с НДС", "Значение": _fmt_ref_rub(ref.get("cost_with_vat", 0.0))},
-                {"Показатель": "Бюджет с НДС и АК", "Значение": _fmt_ref_rub(ref.get("cost_with_vat_ak", 0.0))},
-                {"Показатель": "CTR", "Значение": _fmt_ref_pct(ref.get("ctr", 0.0))},
-                {"Показатель": "CPC", "Значение": _fmt_ref_rub2(ref.get("cpc", 0.0))},
-            ]
-            if metric_mode["is_real_estate_full"]:
-                rows += [
-                    {"Показатель": "CR1 в лид", "Значение": _fmt_ref_pct(ref.get("cr1", 0.0))},
-                    {"Показатель": "Лиды", "Значение": _fmt_ref_int(ref.get("leads", 0.0))},
-                    {"Показатель": "CPL", "Значение": _fmt_ref_rub(ref.get("cpl", 0.0))},
-                    {"Показатель": "CR2 в ЦО", "Значение": _fmt_ref_pct(ref.get("cr2", 0.0))},
-                    {"Показатель": "ЦО", "Значение": _fmt_ref_int(ref.get("target_leads", ref.get("conversions", 0.0)))},
-                    {"Показатель": "CPQL", "Значение": _fmt_ref_rub(ref.get("cpql", 0.0))},
-                ]
-            else:
-                rows += [
-                    {"Показатель": "CR в ЦО", "Значение": _fmt_ref_pct(ref.get("cr", 0.0))},
-                    {"Показатель": "ЦО", "Значение": _fmt_ref_int(ref.get("target_leads", ref.get("conversions", 0.0)))},
-                    {"Показатель": "CPQL", "Значение": _fmt_ref_rub(ref.get("cpql", ref.get("cpo", 0.0)))},
-                ]
-        elif is_diy_preset:
-            rows = [
-                {"Показатель": "Показы", "Значение": _fmt_ref_int(ref.get("impressions", 0.0))},
-                {"Показатель": "Клики", "Значение": _fmt_ref_int(ref.get("clicks", 0.0))},
-                {"Показатель": "Кол-во оформленных заказов", "Значение": _fmt_ref_int(ref.get("conversions", 0.0))},
-                {"Показатель": "Бюджет, руб. без НДС", "Значение": _fmt_ref_rub(ref.get("cost", 0.0))},
-                {"Показатель": "Бюджет с НДС и АК", "Значение": _fmt_ref_rub(ref.get("cost_with_vat_ak", 0.0))},
-                {"Показатель": "Оформленный доход, руб. с НДС", "Значение": _fmt_ref_rub(ref.get("revenue", 0.0))},
-                {"Показатель": "CTR", "Значение": _fmt_ref_pct(ref.get("ctr", 0.0))},
-                {"Показатель": "CPC", "Значение": _fmt_ref_rub2(ref.get("cpc", 0.0))},
-                {"Показатель": "CR1", "Значение": _fmt_ref_pct(ref.get("cr", 0.0))},
-                {"Показатель": "Стоимость оформл. заказа", "Значение": _fmt_ref_rub(ref.get("cpa", 0.0))},
-                {"Показатель": "ROAS оформл.", "Значение": _fmt_ref_roas(ref.get("roas", 0.0))},
-                {"Показатель": "ДРР от оформл. дохода", "Значение": _fmt_ref_pct(ref.get("drr", 0.0))},
-            ]
-        else:
-            rows = [
-                {"Показатель": "Показы", "Значение": _fmt_ref_int(ref.get("impressions", 0.0))},
-                {"Показатель": "Клики", "Значение": _fmt_ref_int(ref.get("clicks", 0.0))},
-                {"Показатель": "Конверсии", "Значение": _fmt_ref_int(ref.get("conversions", 0.0))},
-                {"Показатель": "Бюджет", "Значение": _fmt_ref_rub(ref.get("cost", 0.0))},
-                {"Показатель": "Бюджет с НДС", "Значение": _fmt_ref_rub(ref.get("cost_with_vat", 0.0))},
-                {"Показатель": "Бюджет с НДС и АК", "Значение": _fmt_ref_rub(ref.get("cost_with_vat_ak", 0.0))},
-                {"Показатель": "Доход", "Значение": _fmt_ref_rub(ref.get("revenue", 0.0))},
-                {"Показатель": "CTR", "Значение": _fmt_ref_pct(ref.get("ctr", 0.0))},
-                {"Показатель": "CPC", "Значение": _fmt_ref_rub2(ref.get("cpc", 0.0))},
-                {"Показатель": "CR", "Значение": _fmt_ref_pct(ref.get("cr", 0.0))},
-                {"Показатель": "CPO", "Значение": _fmt_ref_rub(ref.get("cpo", 0.0))},
-                {"Показатель": "ROAS", "Значение": _fmt_ref_roas(ref.get("roas", 0.0))},
-                {"Показатель": "ДРР", "Значение": _fmt_ref_pct(ref.get("drr", 0.0))},
-            ]
-        return pd.DataFrame(rows)
 
     def _df_for_compare(df: pd.DataFrame) -> pd.DataFrame:
         if df is None:
@@ -3020,13 +3139,13 @@ with tab_plan:
 
         default_campaigns = pd.DataFrame(
             [
-                ["Поиск бренд", "B2C", "Яндекс", "Поиск", "", 500_000, 5.0, 15.0, 5.0, 50.0, 5000.0, 220_000, 0.0, 0.0, 0.0, 0.0],
-                ["РСЯ баннеры", "B2C", "Яндекс", "РСЯ баннеры", "", 1_000_000, 1.0, 10.0, 2.0, 40.0, 3000.0, 450_000, 0.0, 0.0, 0.0, 0.0],
-                ["Видео YouTube", "B2B", "YouTube", "Видео", "", 300_000, 0.7, 20.0, 1.5, 35.0, 4000.0, 180_000, 0.0, 0.0, 0.0, 0.0],
+                ["Поиск бренд", "B2C", "Яндекс", "Поиск", "",        500_000, 5.0, 15.0, 5.0, 50.0, 5000.0, 220_000, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ["РСЯ баннеры", "B2C", "Яндекс", "РСЯ баннеры", "", 1_000_000, 1.0, 10.0, 2.0, 40.0, 3000.0, 450_000, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ["Видео YouTube", "B2B", "YouTube", "Видео", "",     300_000, 0.7, 20.0, 1.5, 35.0, 4000.0, 180_000, 0.0, 0.0, 0.0, 0.0, 0.0],
             ],
             columns=[
                 "campaign_type", "segment", "system", "format", "geo",
-                "impressions_avg", "ctr_avg_percent", "cpc_avg", "cr_avg_percent", "cr2_avg_percent", "aov_avg",
+                "impressions_avg", "ctr_avg_percent", "cpc_avg", "cr_avg_percent", "cr2_avg_percent", "aov_avg", "reach_avg",
                 "available_capacity_avg", "client_count_avg", "absolute_new_clients_avg", "returned_clients_avg", "order_frequency_avg",
             ],
         )
@@ -3047,6 +3166,8 @@ with tab_plan:
             st.session_state["campaigns_df"]["returned_clients_avg"] = 0.0
         if "order_frequency_avg" not in st.session_state["campaigns_df"].columns:
             st.session_state["campaigns_df"]["order_frequency_avg"] = 0.0
+        if "reach_avg" not in st.session_state["campaigns_df"].columns:
+            st.session_state["campaigns_df"]["reach_avg"] = 0.0
         if "cr2_avg_percent" not in st.session_state["campaigns_df"].columns:
             st.session_state["campaigns_df"]["cr2_avg_percent"] = 0.0
 
@@ -3062,6 +3183,7 @@ with tab_plan:
             "cr_avg_percent",
             "cr2_avg_percent",
             "aov_avg",
+            "reach_avg",
             "available_capacity_avg",
             "client_count_avg",
             "absolute_new_clients_avg",
@@ -3086,12 +3208,10 @@ with tab_plan:
             "cpc_avg": st.column_config.NumberColumn(
                 "CPC, ₽ (средний месяц)", format="%.2f", help=mhelp("cpc")
             ),
-            "cr_avg_percent": st.column_config.NumberColumn("CR1, % (средний месяц)" if is_diy_preset else "CR в ЦО, % (средний месяц)" if metric_mode["is_real_estate_simple"] else "CR1 в лид, % (средний месяц)" if metric_mode["is_real_estate_full"] else "CR, % (средний месяц)", format="%.2f", help=mhelp("cr")),
+            "cr_avg_percent": st.column_config.NumberColumn("CR1, % (средний месяц)" if is_diy_preset else "CR в ЦО, % (средний месяц)" if metric_mode["is_real_estate_simple"] else "CR1 в Лид, % (средний месяц)" if metric_mode["is_real_estate_full"] else "CR, % (средний месяц)", format="%.2f", help=mhelp("cr")),
             "cr2_avg_percent": st.column_config.NumberColumn("CR2, % (средний месяц)", format="%.2f", help="Отгруженные заказы = оформленные заказы × CR2."),
-            "aov_avg": st.column_config.NumberColumn(
-                "Средний чек по оформл. доходу, с НДС (средний месяц)" if is_diy_preset else "AOV (средний месяц)",
-                format="%.2f",
-                help=mhelp("aov"),
+            "reach_avg": st.column_config.NumberColumn(
+                "Охват (средний месяц)", format="%.0f", help=mhelp("reach")
             ),
         }
         campaigns_editor_columns = [
@@ -3107,11 +3227,12 @@ with tab_plan:
             campaigns_editor_columns.insert(3, "geo")
         if metric_mode["is_real_estate_full"] or is_diy_preset:
             campaigns_editor_columns.append("cr2_avg_percent")
-        if metric_mode["needs_aov"]:
+        elif metric_mode["needs_aov"]:
             campaigns_editor_columns.append("aov_avg")
         if is_diy_preset:
             campaigns_column_config["segment"] = st.column_config.SelectboxColumn("Сегмент", options=["B2B", "B2C"])
             campaigns_editor_columns.insert(4, "segment")
+            campaigns_editor_columns.append("reach_avg")
             campaigns_column_config["available_capacity_avg"] = st.column_config.NumberColumn(
                 "Доступная емкость (база)", format="%.0f"
             )
@@ -3133,7 +3254,7 @@ with tab_plan:
             campaigns_draft = st.data_editor(
                 st.session_state["campaigns_df"],
                 num_rows="dynamic",
-                use_container_width=True,
+                width="stretch",
                 row_height=ui_editor_row_height,
                 column_order=campaigns_editor_columns,
                 column_config=campaigns_column_config,
@@ -3163,6 +3284,7 @@ with tab_plan:
                 "cr_avg_percent": 0.0,
                 "cr2_avg_percent": 0.0,
                 "aov_avg": 0.0,
+                "reach_avg": 0.0,
                 "available_capacity_avg": 0.0,
                 "client_count_avg": 0.0,
                 "absolute_new_clients_avg": 0.0,
@@ -3208,7 +3330,7 @@ with tab_plan:
             elif metric_mode["is_real_estate_simple"]:
                 required_labels += ["CR в ЦО"]
             elif is_diy_preset:
-                required_labels += ["CR1", "CR2", "Средний чек по оформл. доходу"]
+                required_labels += ["CR", "AOV", "Охват"]
             else:
                 required_labels += ["CR", "AOV"]
             st.error(
@@ -3300,17 +3422,18 @@ with tab_plan:
             "Учитывать АК в расчетах",
             key="use_ak_budget_metrics",
         )
+        vat_ak_ui_config = get_vat_ak_ui_config(metric_mode, is_real_estate_preset)
+        vat_warning_text = vat_ak_ui_config["warning_text"]
+        ak_mode_labels = vat_ak_ui_config["ak_mode_labels"]
+        mode_label_by_value = vat_ak_ui_config["mode_label_by_value"]
+        mode_value_by_label = vat_ak_ui_config["mode_value_by_label"]
         ak_mode_label = st.selectbox(
             "Способ расчета АК",
-            options=["Процент по шкале", "Фиксированная сумма в месяц", "Фиксированный процент"],
-            index=0 if ak_mode == "percent" else 1 if ak_mode == "fixed" else 2,
+            options=ak_mode_labels,
+            index=ak_mode_labels.index(mode_label_by_value.get(ak_mode, ak_mode_labels[0])),
             key="ak_mode_select",
         )
-        ak_mode = (
-            "percent" if ak_mode_label == "Процент по шкале"
-            else "fixed" if ak_mode_label == "Фиксированная сумма в месяц"
-            else "fixed_percent"
-        )
+        ak_mode = mode_value_by_label.get(ak_mode_label, "percent")
         st.session_state["ak_mode"] = ak_mode
         if ak_mode == "fixed":
             ak_fixed_month_wo_vat = st.number_input(
@@ -3341,7 +3464,7 @@ with tab_plan:
                     ak_rules_draft = st.data_editor(
                         st.session_state["ak_rules_df"],
                         num_rows="dynamic",
-                        use_container_width=True,
+                        width="stretch",
                         row_height=ui_editor_row_height,
                         column_config={
                             "min_budget_wo_vat": st.column_config.NumberColumn(
@@ -3360,33 +3483,21 @@ with tab_plan:
                         key=ak_editor_key,
                     )
                 if isinstance(ak_rules_draft, pd.DataFrame):
-                    ak_rules_clean = ak_rules_draft.copy()
-                    for c in ["min_budget_wo_vat", "ak_percent"]:
-                        if c not in ak_rules_clean.columns:
-                            ak_rules_clean[c] = 0.0
-                    ak_rules_clean["min_budget_wo_vat"] = ak_rules_clean["min_budget_wo_vat"].map(
-                        lambda v: parse_float_loose(v, 0.0)
-                    )
-                    ak_rules_clean["ak_percent"] = ak_rules_clean["ak_percent"].map(
-                        lambda v: parse_float_loose(v, 0.0)
-                    )
-                    ak_rules_clean = ak_rules_clean[
-                        ["min_budget_wo_vat", "ak_percent"]
-                    ].sort_values("min_budget_wo_vat", kind="stable").reset_index(drop=True)
-                    if ak_rules_clean.empty:
-                        ak_rules_clean = pd.DataFrame([{"min_budget_wo_vat": 0.0, "ak_percent": 0.0}])
+                    ak_rules_clean = normalize_ak_rules_df(ak_rules_draft)
                     st.session_state["ak_rules_df"] = ak_rules_clean
                     ak_rules_df = ak_rules_clean
-        current_vat_ak_sig = (
-            bool(use_vat_budget_metrics),
-            bool(use_ak_budget_metrics),
-            str(ak_mode),
-            round(float(ak_fixed_month_wo_vat), 4) if ak_mode == "fixed" else None,
-            round(float(ak_fixed_percent), 4) if ak_mode == "fixed_percent" else None,
-            make_ak_rules_signature(st.session_state.get("ak_rules_df")) if ak_mode == "percent" else tuple(),
+        vat_ak_apply_state = get_vat_ak_apply_state(
+            use_vat_budget_metrics=use_vat_budget_metrics,
+            use_ak_budget_metrics=use_ak_budget_metrics,
+            ak_mode=ak_mode,
+            ak_fixed_month_wo_vat=ak_fixed_month_wo_vat,
+            ak_fixed_percent=ak_fixed_percent,
+            ak_rules_df=st.session_state.get("ak_rules_df"),
+            last_applied_sig=st.session_state.get("vat_ak_last_applied_sig"),
         )
-        last_applied_vat_ak_sig = st.session_state.get("vat_ak_last_applied_sig")
-        vat_ak_dirty = current_vat_ak_sig != last_applied_vat_ak_sig
+        current_vat_ak_sig = vat_ak_apply_state["current_sig"]
+        last_applied_vat_ak_sig = vat_ak_apply_state["last_applied_sig"]
+        vat_ak_dirty = vat_ak_apply_state["dirty"]
         apply_vat_ak_clicked = st.button(
             "Применить настройки НДС и АК",
             type="primary" if vat_ak_dirty else "secondary",
@@ -3427,28 +3538,36 @@ with tab_plan:
         )
 
         coeff_sets = st.session_state.get("coeff_sets", [])
-
-        coeff_set_type_map = {
-            str(cs.get("name", "")): infer_coeff_set_bucket(cs)
+        coeff_sets_by_id = {
+            get_coeff_set_id_value(cs): cs
             for cs in coeff_sets
+            if isinstance(cs, dict) and get_coeff_set_id_value(cs)
         }
-        demand_set_names = [
-            cs["name"] for cs in coeff_sets
-            if coeff_set_type_map.get(str(cs.get("name", ""))) in ["demand", "custom"]
+
+        demand_set_ids = [
+            get_coeff_set_id_value(cs) for cs in coeff_sets
+            if normalize_coeff_set_type(cs.get("type")) in ["Спрос (по запросам)", "Кастомный набор"]
+            and get_coeff_set_id_value(cs)
         ]
-        aov_set_names = [
-            cs["name"] for cs in coeff_sets
-            if coeff_set_type_map.get(str(cs.get("name", ""))) in ["aov", "custom"]
+        aov_set_ids = [
+            get_coeff_set_id_value(cs) for cs in coeff_sets
+            if normalize_coeff_set_type(cs.get("type")) in ["AOV (средний чек)", "Кастомный набор"]
+            and get_coeff_set_id_value(cs)
         ]
-        media_tail_set_names = [
-            cs["name"] for cs in coeff_sets
-            if coeff_set_type_map.get(str(cs.get("name", ""))) == "media_tail"
+        media_tail_set_ids = [
+            get_coeff_set_id_value(cs) for cs in coeff_sets
+            if normalize_coeff_set_type(cs.get("type")) == "Медийные хвосты"
+            and get_coeff_set_id_value(cs)
         ]
-        capacity_set_names = [cs["name"] for cs in coeff_sets]
-        valid_demand_set_names = set(demand_set_names)
-        valid_aov_set_names = set(aov_set_names)
-        valid_media_tail_set_names = set(media_tail_set_names)
-        valid_capacity_set_names = set(capacity_set_names)
+        capacity_set_ids = [get_coeff_set_id_value(cs) for cs in coeff_sets if get_coeff_set_id_value(cs)]
+        valid_demand_set_ids = set(demand_set_ids)
+        valid_aov_set_ids = set(aov_set_ids)
+        valid_media_tail_set_ids = set(media_tail_set_ids)
+        valid_capacity_set_ids = set(capacity_set_ids)
+        demand_set_labels = [get_coeff_set_label(coeff_sets_by_id[set_id]) for set_id in demand_set_ids if set_id in coeff_sets_by_id]
+        aov_set_labels = [get_coeff_set_label(coeff_sets_by_id[set_id]) for set_id in aov_set_ids if set_id in coeff_sets_by_id]
+        media_tail_set_labels = [get_coeff_set_label(coeff_sets_by_id[set_id]) for set_id in media_tail_set_ids if set_id in coeff_sets_by_id]
+        capacity_set_labels = [get_coeff_set_label(coeff_sets_by_id[set_id]) for set_id in capacity_set_ids if set_id in coeff_sets_by_id]
 
         if "coeff_sets_links_new" not in st.session_state:
             st.session_state["coeff_sets_links_new"] = pd.DataFrame(
@@ -3469,21 +3588,21 @@ with tab_plan:
             if not ct:
                 continue
             if ct not in prev_demand_map:
-                prev_demand_map[ct] = str(r.get("demand_set", "")).strip()
+                prev_demand_map[ct] = normalize_coeff_link_value(r.get("demand_set", ""), coeff_sets, valid_demand_set_ids)
             if ct not in prev_aov_map:
-                prev_aov_map[ct] = str(r.get("aov_set", "")).strip()
+                prev_aov_map[ct] = normalize_coeff_link_value(r.get("aov_set", ""), coeff_sets, valid_aov_set_ids)
             if ct not in prev_media_tail_map:
-                prev_media_tail_map[ct] = str(r.get("media_tail_set", "")).strip()
+                prev_media_tail_map[ct] = normalize_coeff_link_value(r.get("media_tail_set", ""), coeff_sets, valid_media_tail_set_ids)
             if ct not in prev_capacity_map:
-                prev_capacity_map[ct] = str(r.get("capacity_set", "")).strip()
+                prev_capacity_map[ct] = normalize_coeff_link_value(r.get("capacity_set", ""), coeff_sets, valid_capacity_set_ids)
             if ct not in prev_client_count_map:
-                prev_client_count_map[ct] = str(r.get("client_count_set", "")).strip()
+                prev_client_count_map[ct] = normalize_coeff_link_value(r.get("client_count_set", ""), coeff_sets, valid_capacity_set_ids)
             if ct not in prev_absolute_new_clients_map:
-                prev_absolute_new_clients_map[ct] = str(r.get("absolute_new_clients_set", "")).strip()
+                prev_absolute_new_clients_map[ct] = normalize_coeff_link_value(r.get("absolute_new_clients_set", ""), coeff_sets, valid_capacity_set_ids)
             if ct not in prev_returned_clients_map:
-                prev_returned_clients_map[ct] = str(r.get("returned_clients_set", "")).strip()
+                prev_returned_clients_map[ct] = normalize_coeff_link_value(r.get("returned_clients_set", ""), coeff_sets, valid_capacity_set_ids)
             if ct not in prev_order_frequency_map:
-                prev_order_frequency_map[ct] = str(r.get("order_frequency_set", "")).strip()
+                prev_order_frequency_map[ct] = normalize_coeff_link_value(r.get("order_frequency_set", ""), coeff_sets, valid_capacity_set_ids)
 
         coeff_links_new = pd.DataFrame(
             {
@@ -3505,47 +3624,67 @@ with tab_plan:
 
         dangling_links_detected = False
         if "demand_set" in coeff_links_new.columns:
-            invalid_mask = coeff_links_new["demand_set"].astype(str).str.strip().ne("") & ~coeff_links_new["demand_set"].isin(valid_demand_set_names)
+            invalid_mask = coeff_links_new["demand_set"].astype(str).str.strip().ne("") & ~coeff_links_new["demand_set"].isin(valid_demand_set_ids)
             if invalid_mask.any():
                 coeff_links_new.loc[invalid_mask, "demand_set"] = ""
                 dangling_links_detected = True
         if "aov_set" in coeff_links_new.columns:
-            invalid_mask = coeff_links_new["aov_set"].astype(str).str.strip().ne("") & ~coeff_links_new["aov_set"].isin(valid_aov_set_names)
+            invalid_mask = coeff_links_new["aov_set"].astype(str).str.strip().ne("") & ~coeff_links_new["aov_set"].isin(valid_aov_set_ids)
             if invalid_mask.any():
                 coeff_links_new.loc[invalid_mask, "aov_set"] = ""
                 dangling_links_detected = True
         if "media_tail_set" in coeff_links_new.columns:
-            invalid_mask = coeff_links_new["media_tail_set"].astype(str).str.strip().ne("") & ~coeff_links_new["media_tail_set"].isin(valid_media_tail_set_names)
+            invalid_mask = coeff_links_new["media_tail_set"].astype(str).str.strip().ne("") & ~coeff_links_new["media_tail_set"].isin(valid_media_tail_set_ids)
             if invalid_mask.any():
                 coeff_links_new.loc[invalid_mask, "media_tail_set"] = ""
                 dangling_links_detected = True
         if "capacity_set" in coeff_links_new.columns:
-            invalid_mask = coeff_links_new["capacity_set"].astype(str).str.strip().ne("") & ~coeff_links_new["capacity_set"].isin(valid_capacity_set_names)
+            invalid_mask = coeff_links_new["capacity_set"].astype(str).str.strip().ne("") & ~coeff_links_new["capacity_set"].isin(valid_capacity_set_ids)
             if invalid_mask.any():
                 coeff_links_new.loc[invalid_mask, "capacity_set"] = ""
                 dangling_links_detected = True
         if "client_count_set" in coeff_links_new.columns:
-            invalid_mask = coeff_links_new["client_count_set"].astype(str).str.strip().ne("") & ~coeff_links_new["client_count_set"].isin(valid_capacity_set_names)
+            invalid_mask = coeff_links_new["client_count_set"].astype(str).str.strip().ne("") & ~coeff_links_new["client_count_set"].isin(valid_capacity_set_ids)
             if invalid_mask.any():
                 coeff_links_new.loc[invalid_mask, "client_count_set"] = ""
                 dangling_links_detected = True
         if "absolute_new_clients_set" in coeff_links_new.columns:
-            invalid_mask = coeff_links_new["absolute_new_clients_set"].astype(str).str.strip().ne("") & ~coeff_links_new["absolute_new_clients_set"].isin(valid_capacity_set_names)
+            invalid_mask = coeff_links_new["absolute_new_clients_set"].astype(str).str.strip().ne("") & ~coeff_links_new["absolute_new_clients_set"].isin(valid_capacity_set_ids)
             if invalid_mask.any():
                 coeff_links_new.loc[invalid_mask, "absolute_new_clients_set"] = ""
                 dangling_links_detected = True
         if "returned_clients_set" in coeff_links_new.columns:
-            invalid_mask = coeff_links_new["returned_clients_set"].astype(str).str.strip().ne("") & ~coeff_links_new["returned_clients_set"].isin(valid_capacity_set_names)
+            invalid_mask = coeff_links_new["returned_clients_set"].astype(str).str.strip().ne("") & ~coeff_links_new["returned_clients_set"].isin(valid_capacity_set_ids)
             if invalid_mask.any():
                 coeff_links_new.loc[invalid_mask, "returned_clients_set"] = ""
                 dangling_links_detected = True
         if "order_frequency_set" in coeff_links_new.columns:
-            invalid_mask = coeff_links_new["order_frequency_set"].astype(str).str.strip().ne("") & ~coeff_links_new["order_frequency_set"].isin(valid_capacity_set_names)
+            invalid_mask = coeff_links_new["order_frequency_set"].astype(str).str.strip().ne("") & ~coeff_links_new["order_frequency_set"].isin(valid_capacity_set_ids)
             if invalid_mask.any():
                 coeff_links_new.loc[invalid_mask, "order_frequency_set"] = ""
                 dangling_links_detected = True
         if dangling_links_detected:
             st.session_state["coeff_sets_links_new"] = coeff_links_new.copy()
+
+        coeff_links_editor = coeff_links_new.copy()
+        coeff_link_allowed_ids = {
+            "demand_set": valid_demand_set_ids,
+            "aov_set": valid_aov_set_ids,
+            "media_tail_set": valid_media_tail_set_ids,
+            "capacity_set": valid_capacity_set_ids,
+            "client_count_set": valid_capacity_set_ids,
+            "absolute_new_clients_set": valid_capacity_set_ids,
+            "returned_clients_set": valid_capacity_set_ids,
+            "order_frequency_set": valid_capacity_set_ids,
+        }
+        for col_name, allowed_ids in coeff_link_allowed_ids.items():
+            if col_name not in coeff_links_editor.columns:
+                continue
+            coeff_links_editor[col_name] = coeff_links_editor[col_name].map(
+                lambda raw_value: get_coeff_set_label(coeff_sets_by_id[raw_value])
+                if str(raw_value).strip() in allowed_ids and str(raw_value).strip() in coeff_sets_by_id
+                else ""
+            )
 
         if metric_mode["needs_aov"]:
             st.markdown(
@@ -3565,7 +3704,7 @@ with tab_plan:
             with bulk_c1:
                 bulk_demand_set = st.selectbox(
                     "Набор спроса для всех РК",
-                    options=[""] + demand_set_names,
+                    options=[""] + demand_set_labels,
                     help="Быстро назначает один набор сезонности спроса всем типам РК в таблице ниже.",
                     key="bulk_demand_set_for_all",
                 )
@@ -3574,7 +3713,7 @@ with tab_plan:
                 with bulk_c2:
                     bulk_aov_set = st.selectbox(
                         "Набор AOV для всех РК",
-                        options=[""] + aov_set_names,
+                        options=[""] + aov_set_labels,
                         help="Быстро назначает один набор сезонности AOV всем типам РК в таблице ниже.",
                         key="bulk_aov_set_for_all",
                     )
@@ -3588,52 +3727,52 @@ with tab_plan:
                 ),
                 "demand_set": st.column_config.SelectboxColumn(
                     "Набор сезонности спроса",
-                    options=demand_set_names,
+                    options=demand_set_labels,
                     help="Влияет на показы (k_imp), а также через эластичность на CTR/CPC/CR.",
                 ),
                 "media_tail_set": st.column_config.SelectboxColumn(
                     "Набор медийных хвостов (показы)",
-                    options=[""] + media_tail_set_names,
+                    options=[""] + media_tail_set_labels,
                     help="Множитель показов поверх спроса: k_imp = k_demand * k_media_tail.",
                 ),
             }
             if metric_mode["needs_aov"]:
                 links_column_config["aov_set"] = st.column_config.SelectboxColumn(
                     "Набор сезонности AOV",
-                    options=aov_set_names,
+                    options=aov_set_labels,
                     help="Влияет на средний чек: k_aov.",
                 )
             if is_diy_preset:
                 links_column_config["capacity_set"] = st.column_config.SelectboxColumn(
                     "Набор для емкости",
-                    options=capacity_set_names,
+                    options=capacity_set_labels,
                     help="Коэффициенты этого набора применяются к доступной емкости (k_capacity).",
                 )
                 links_column_config["client_count_set"] = st.column_config.SelectboxColumn(
                     "Набор для клиентов",
-                    options=capacity_set_names,
+                    options=capacity_set_labels,
                     help="Коэффициенты этого набора применяются к количеству клиентов (k_client_count).",
                 )
                 links_column_config["absolute_new_clients_set"] = st.column_config.SelectboxColumn(
                     "Набор для АНК",
-                    options=capacity_set_names,
+                    options=capacity_set_labels,
                     help="Коэффициенты этого набора применяются к абсолютно новым клиентам.",
                 )
                 links_column_config["returned_clients_set"] = st.column_config.SelectboxColumn(
                     "Набор для вернувшихся",
-                    options=capacity_set_names,
+                    options=capacity_set_labels,
                     help="Коэффициенты этого набора применяются к вернувшимся клиентам.",
                 )
                 links_column_config["order_frequency_set"] = st.column_config.SelectboxColumn(
                     "Набор для частоты заказа",
-                    options=capacity_set_names,
+                    options=capacity_set_labels,
                     help="Коэффициенты этого набора применяются к частоте заказа.",
                 )
 
             coeff_links_draft = st.data_editor(
-                coeff_links_new,
+                coeff_links_editor,
                 num_rows="fixed",
-                use_container_width=True,
+                width="stretch",
                 row_height=ui_editor_row_height,
                 column_config=links_column_config,
                 key="coeff_sets_links_new_editor",
@@ -3644,15 +3783,23 @@ with tab_plan:
 
         if apply_all_clicked or links_saved:
             coeff_links_new = coeff_links_draft.copy()
+            for col_name, allowed_ids in coeff_link_allowed_ids.items():
+                if col_name in coeff_links_new.columns:
+                    coeff_links_new[col_name] = coeff_links_new[col_name].map(
+                        lambda raw_value: normalize_coeff_link_value(raw_value, coeff_sets, allowed_ids)
+                    )
             if apply_all_clicked:
-                if bulk_demand_set:
-                    coeff_links_new["demand_set"] = bulk_demand_set
-                if bulk_aov_set:
-                    coeff_links_new["aov_set"] = bulk_aov_set
+                bulk_demand_set_id = normalize_coeff_link_value(bulk_demand_set, coeff_sets, valid_demand_set_ids)
+                bulk_aov_set_id = normalize_coeff_link_value(bulk_aov_set, coeff_sets, valid_aov_set_ids)
+                if bulk_demand_set_id:
+                    coeff_links_new["demand_set"] = bulk_demand_set_id
+                if bulk_aov_set_id and "aov_set" in coeff_links_new.columns:
+                    coeff_links_new["aov_set"] = bulk_aov_set_id
             st.session_state["coeff_sets_links_new"] = coeff_links_new
             if apply_all_clicked:
                 # После массового применения перерисовываем форму,
                 # чтобы data_editor отобразил новые значения в строках.
+                st.session_state.pop("coeff_sets_links_new_editor", None)
                 st.rerun()
 
         aov_link_map = {}
@@ -3708,8 +3855,8 @@ with tab_plan:
             "**Как считаются эффекты эластичности:**\n"
             "1. `CPC` в режиме роста CPC: формула `(k-1)/div + 1`.\n"
             "2. `CTR` в режиме падения CTR: формула `1 - (k-1)/div`.\n"
-            "3. `CR`/`CR1` в режиме падения конверсии: формула `1 - (k-1)/div`.\n"
-            + ("4. `CR2` считается отдельно, когда в выбранном пресете используется второй шаг воронки.\n" if show_cr2_elasticity else "")
+            "3. `CR` в режиме падения CR: формула `1 - (k-1)/div`.\n"
+            + ("4. `CR2` в недвижимости считается отдельно только для полной воронки.\n" if show_cr2_elasticity else "")
             + "Пример: для `k=1.10` и `CPC div=2` получится `+5%` к CPC."
         )
 
@@ -3833,18 +3980,18 @@ with tab_plan:
             }
             st.caption("Для каждого типа РК можно выбрать пресет в колонке «Пресет» или задать значения вручную (Кастом).")
             st.info("Чтобы выбрать пресет: кликните ячейку в колонке «Пресет ▼» и выберите вариант из списка.")
-            st.caption("В колонках CPC/CTR/CR указываются делители влияния. Процентный эффект для выбранного коэффициента спроса показывается в превью справа." + (" Если в пресете есть второй шаг воронки, отдельно настраивается CR2." if show_cr2_elasticity else ""))
+            st.caption("В колонках CPC/CTR/CR указываются делители влияния. Процентный эффект для выбранного коэффициента спроса показывается в превью справа." + (" Для полной воронки недвижимости отдельно настраивается CR2." if show_cr2_elasticity else ""))
             st.markdown(
                 "**Пресеты влияния:**\n"
-                "1. `Слабое` - слабое влияние на метрики (CPC растет меньше, CTR/CR падают меньше).\n"
-                "2. `Среднее` - сбалансированный вариант (дефолт для большинства задач).\n"
-                "3. `Сильное` - агрессивное влияние (выше рост CPC и сильнее падение CTR/CR).\n"
+                "1. `Мягкий` - слабое влияние на метрики (CPC растет меньше, CTR/CR падают меньше).\n"
+                "2. `Средний` - сбалансированный вариант (дефолт для большинства задач).\n"
+                "3. `Сильный` - агрессивное влияние (выше рост CPC и сильнее падение CTR/CR).\n"
             )
             st.caption(
                 "Пример эффекта для роста спроса на +10%:\n"
-                "Слабое: CPC +5.0%, CTR -2.0%, CR -0.67% | "
-                "Среднее: CPC +10.0%, CTR -5.0%, CR -1.0% | "
-                "Сильное: CPC +20.0%, CTR -10.0%, CR -2.0%."
+                "Мягкий: CPC +5.0%, CTR -2.0%, CR -0.67% | "
+                "Средний: CPC +10.0%, CTR -5.0%, CR -1.0% | "
+                "Сильный: CPC +20.0%, CTR -10.0%, CR -2.0%."
             )
             st.caption(
                 "Пример при +30% спроса (в 3 раза сильнее): "
@@ -3852,9 +3999,10 @@ with tab_plan:
             )
             st.caption(
                 "Пример для снижения спроса до k=0.85 (-15%):\n"
-                "Слабое: CPC -7.5%, CTR +3.0%, CR +1.0% | "
-                "Среднее: CPC -15.0%, CTR +7.5%, CR +1.5% | "
-                "Сильное: CPC -30.0%, CTR +15.0%, CR +3.0%."
+                "Мягкий: CPC -7.5%, CTR +3.0%, CR +1.0% | "
+                "Средний: CPC -15.0%, CTR +7.5%, CR +1.5% | "
+                "Сильный: CPC -30.0%, CTR +15.0%, CR +3.0%."
+                "Сильный: CPC -30.0%, CTR +15.0%, CR +3.0%."
             )
             top_left, top_right = st.columns([1.55, 1.05], vertical_alignment="bottom")
             with top_left:
@@ -3893,7 +4041,7 @@ with tab_plan:
                 elasticity_draft = st.data_editor(
                     elasticity_df,
                     num_rows="fixed",
-                    use_container_width=True,
+                    width="stretch",
                     row_height=elasticity_row_h,
                     height=compact_h,
                     column_config={
@@ -3999,7 +4147,7 @@ with tab_plan:
                     preview_effective.style
                     .format({"CPC, %": "{:+.2f}%", "CTR, %": "{:+.2f}%", "CR, %": "{:+.2f}%", "CR2, %": "{:+.2f}%"})
                     .apply(_style_impact_col, axis=0, subset=["CPC, %", "CTR, %", "CR, %"] + (["CR2, %"] if show_cr2_elasticity else [])),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     height=compact_h,
                 )
@@ -4120,6 +4268,9 @@ with tab_plan:
                 + ("CPC=1.0, CTR=2.0, CR1=10.0, CR2=10.0." if show_cr2_elasticity else "CPC=1.0, CTR=2.0, CR=10.0.")
             )
 
+with tab_setup:
+    st.caption("Ниже показан полный базовый «Средний месяц», который используется как опора для дальнейшего помесячного расчета.")
+
     # ---------- 2. Средний месяц (базовые значения) ----------
 
     if plan_calc_blockers:
@@ -4129,6 +4280,9 @@ with tab_plan:
             + "."
         )
         selected_month_nums = []
+        selected_planning_slots = []
+        selected_periods = []
+        selected_periods_by_slot = {}
 
     ui_section_title("2. Средний месяц (базовые значения)")
     # Берем актуальные правила из session_state перед расчетами,
@@ -4164,10 +4318,7 @@ with tab_plan:
             out["returned_clients"] = float(base_row.get("returned_clients_avg", 0.0) or 0.0)
             out["new_clients"] = float(out.get("absolute_new_clients", 0.0)) + float(out.get("returned_clients", 0.0))
             out["order_frequency"] = float(base_row.get("order_frequency_avg", 0.0) or 0.0)
-            out["new_clients_share_pct"] = (
-                float(out.get("new_clients", 0.0)) / float(out.get("client_count", 0.0)) * 100.0
-                if float(out.get("client_count", 0.0)) > 0 else 0.0
-            )
+            out["new_clients_share_pct"] = calc_new_clients_share_pct(out["new_clients"], out["client_count"])
             out["sov_pct"] = (float(out.get("reach", 0.0)) / cap_avg * 100.0) if cap_avg > 0 else 0.0
             out["cac"] = (float(out.get("cost_with_vat_ak", 0.0)) / float(out.get("new_clients", 0.0))) if float(out.get("new_clients", 0.0)) > 0 else 0.0
             out["shipped_orders"] = float(out.get("target_leads", 0.0) or 0.0)
@@ -4212,7 +4363,7 @@ with tab_plan:
                 / pd.to_numeric(df_base.get("shipped_orders", 0.0), errors="coerce").fillna(0.0),
                 0.0,
             )
-            shipped_budget_basis = pd.to_numeric(df_base.get("cost_with_vat_ak", 0.0), errors="coerce").fillna(0.0)
+            shipped_budget_basis = pd.to_numeric(df_base.get("cost_with_vat_ak" if use_vat_budget_metrics and use_ak_budget_metrics else "cost_with_vat" if use_vat_budget_metrics else "total_budget_wo_vat_ak" if use_ak_budget_metrics else "cost", 0.0), errors="coerce").fillna(0.0)
             df_base["shipped_roas"] = np.where(
                 shipped_budget_basis > 0,
                 pd.to_numeric(df_base.get("shipped_revenue", 0.0), errors="coerce").fillna(0.0) / shipped_budget_basis,
@@ -4268,7 +4419,7 @@ with tab_plan:
         total_cpm = (total_budget_basis / (total_imp / 1000)) if total_imp > 0 else 0
         total_cpl = (total_budget_basis / total_leads) if total_leads > 0 else 0
         total_cpql = (total_budget_basis / total_target_leads) if total_target_leads > 0 else 0
-        total_roas = (total_rev / total_cost_with_vat_ak) if total_cost_with_vat_ak > 0 else 0
+        total_roas = (total_rev / total_budget_basis) if total_budget_basis > 0 else 0
         total_drr = (total_budget_basis / total_rev * 100) if total_rev > 0 else 0
         st.session_state["mp_ref_base"] = {
             "impressions": float(total_imp),
@@ -4290,7 +4441,7 @@ with tab_plan:
             "cpo": float(total_cpa),
             "cpl": float(total_cpl),
             "cpql": float(total_cpql),
-            "roas": float(total_roas),
+            "roas": float(total_roas * 100.0),
             "drr": float(total_drr),
         }
         base_by_campaign = {}
@@ -4321,8 +4472,7 @@ with tab_plan:
             cpo = (budget_basis / conv) if conv > 0 else 0.0
             cpl = (budget_basis / leads) if leads > 0 else 0.0
             cpql = (budget_basis / target_leads) if target_leads > 0 else 0.0
-            roas_basis = cost_with_vat_ak
-            roas = (rev / roas_basis) if roas_basis > 0 else 0.0
+            roas = (rev / budget_basis * 100.0) if budget_basis > 0 else 0.0
             drr = (budget_basis / rev * 100.0) if rev > 0 else 0.0
             base_by_campaign[camp] = {
                 "impressions": imp,
@@ -4391,17 +4541,14 @@ with tab_plan:
             total_row_raw["new_clients"] = float(df_base["new_clients"].sum()) if "new_clients" in df_base.columns else 0.0
             total_row_raw["order_frequency"] = float(df_base["order_frequency"].mean()) if "order_frequency" in df_base.columns else 0.0
             total_row_raw["sov_pct"] = (total_reach / total_capacity * 100.0) if total_capacity > 0 else 0.0
-            total_row_raw["new_clients_share_pct"] = (
-                float(total_row_raw.get("new_clients", 0.0)) / float(total_row_raw.get("client_count", 0.0)) * 100.0
-                if float(total_row_raw.get("client_count", 0.0)) > 0 else 0.0
-            )
+            total_row_raw["new_clients_share_pct"] = calc_new_clients_share_pct(total_row_raw["new_clients"], total_row_raw["client_count"])
             total_row_raw["cac"] = (total_cost_with_vat_ak / float(total_row_raw["new_clients"])) if float(total_row_raw["new_clients"]) > 0 else 0.0
             total_row_raw["shipped_orders"] = float(df_base["shipped_orders"].sum()) if "shipped_orders" in df_base.columns else 0.0
             total_row_raw["shipped_revenue"] = float(df_base["shipped_revenue"].sum()) if "shipped_revenue" in df_base.columns else 0.0
             total_row_raw["shipped_cps"] = (total_cost_with_vat / float(total_row_raw["shipped_orders"])) if float(total_row_raw["shipped_orders"]) > 0 else 0.0
             total_row_raw["shipped_aov"] = (float(total_row_raw["shipped_revenue"]) / float(total_row_raw["shipped_orders"])) if float(total_row_raw["shipped_orders"]) > 0 else 0.0
-            total_row_raw["shipped_roas"] = (float(total_row_raw["shipped_revenue"]) / total_cost_with_vat_ak) if total_cost_with_vat_ak > 0 else 0.0
-            total_row_raw["shipped_drr_pct"] = (total_cost_with_vat_ak / float(total_row_raw["shipped_revenue"]) * 100.0) if float(total_row_raw["shipped_revenue"]) > 0 else 0.0
+            total_row_raw["shipped_roas"] = (float(total_row_raw["shipped_revenue"]) / total_budget_basis) if total_budget_basis > 0 else 0.0
+            total_row_raw["shipped_drr_pct"] = (total_budget_basis / float(total_row_raw["shipped_revenue"]) * 100.0) if float(total_row_raw["shipped_revenue"]) > 0 else 0.0
             total_row_raw["order_share_segment_pct"] = 100.0
             total_row_raw["revenue_share_segment_pct"] = 100.0
             total_row_raw["shipped_order_share_segment_pct"] = 100.0
@@ -4433,7 +4580,7 @@ with tab_plan:
                 seg_cpa = (seg_cost_with_vat / seg_conv) if (is_diy_preset and seg_conv > 0) else (seg_budget_basis / seg_conv) if seg_conv > 0 else 0
                 seg_cpl = (seg_budget_basis / seg_leads) if seg_leads > 0 else 0
                 seg_cpql = (seg_budget_basis / seg_target_leads) if seg_target_leads > 0 else 0
-                seg_roas = (seg_rev / seg_cost_with_vat_ak) if seg_cost_with_vat_ak > 0 else 0
+                seg_roas = (seg_rev / seg_budget_basis) if seg_budget_basis > 0 else 0
                 seg_drr = (seg_budget_basis / seg_rev * 100) if seg_rev > 0 else 0
                 segment_total_rows.append(
                     {
@@ -4482,26 +4629,30 @@ with tab_plan:
                     segment_total_rows[-1]["new_clients"] = float(seg_df["new_clients"].sum()) if "new_clients" in seg_df.columns else 0.0
                     segment_total_rows[-1]["order_frequency"] = float(seg_df["order_frequency"].mean()) if "order_frequency" in seg_df.columns else 0.0
                     segment_total_rows[-1]["sov_pct"] = (float(segment_total_rows[-1].get("reach", 0.0)) / seg_capacity * 100.0) if seg_capacity > 0 else 0.0
-                    segment_total_rows[-1]["new_clients_share_pct"] = (
-                        float(segment_total_rows[-1].get("new_clients", 0.0)) / float(segment_total_rows[-1].get("client_count", 0.0)) * 100.0
-                        if float(segment_total_rows[-1].get("client_count", 0.0)) > 0 else 0.0
+                    segment_total_rows[-1]["new_clients_share_pct"] = calc_new_clients_share_pct(
+                        segment_total_rows[-1]["new_clients"],
+                        segment_total_rows[-1]["client_count"],
                     )
                     segment_total_rows[-1]["cac"] = (seg_cost_with_vat_ak / float(segment_total_rows[-1]["new_clients"])) if float(segment_total_rows[-1]["new_clients"]) > 0 else 0.0
                     segment_total_rows[-1]["shipped_orders"] = float(seg_df["shipped_orders"].sum()) if "shipped_orders" in seg_df.columns else 0.0
                     segment_total_rows[-1]["shipped_revenue"] = float(seg_df["shipped_revenue"].sum()) if "shipped_revenue" in seg_df.columns else 0.0
                     segment_total_rows[-1]["shipped_cps"] = (seg_cost_with_vat / float(segment_total_rows[-1]["shipped_orders"])) if float(segment_total_rows[-1]["shipped_orders"]) > 0 else 0.0
                     segment_total_rows[-1]["shipped_aov"] = (float(segment_total_rows[-1]["shipped_revenue"]) / float(segment_total_rows[-1]["shipped_orders"])) if float(segment_total_rows[-1]["shipped_orders"]) > 0 else 0.0
-                    segment_total_rows[-1]["shipped_roas"] = (float(segment_total_rows[-1]["shipped_revenue"]) / seg_cost_with_vat_ak) if seg_cost_with_vat_ak > 0 else 0.0
-                    segment_total_rows[-1]["shipped_drr_pct"] = (seg_cost_with_vat_ak / float(segment_total_rows[-1]["shipped_revenue"]) * 100.0) if float(segment_total_rows[-1]["shipped_revenue"]) > 0 else 0.0
-                    segment_total_rows[-1]["order_share_segment_pct"] = (seg_conv / total_conv * 100.0) if total_conv > 0 else 0.0
-                    segment_total_rows[-1]["revenue_share_segment_pct"] = (seg_rev / total_rev * 100.0) if total_rev > 0 else 0.0
-                    segment_total_rows[-1]["shipped_order_share_segment_pct"] = (float(segment_total_rows[-1]["shipped_orders"]) / float(total_row_raw.get("shipped_orders", 0.0)) * 100.0) if float(total_row_raw.get("shipped_orders", 0.0)) > 0 else 0.0
-                    segment_total_rows[-1]["shipped_revenue_share_segment_pct"] = (float(segment_total_rows[-1]["shipped_revenue"]) / float(total_row_raw.get("shipped_revenue", 0.0)) * 100.0) if float(total_row_raw.get("shipped_revenue", 0.0)) > 0 else 0.0
-                    segment_total_rows[-1]["budget_share_segment_pct"] = (seg_cost_with_vat_ak / total_cost_with_vat_ak * 100.0) if total_cost_with_vat_ak > 0 else 0.0
+                    segment_total_rows[-1]["shipped_roas"] = (float(segment_total_rows[-1]["shipped_revenue"]) / seg_budget_basis) if seg_budget_basis > 0 else 0.0
+                    segment_total_rows[-1]["shipped_drr_pct"] = (seg_budget_basis / float(segment_total_rows[-1]["shipped_revenue"]) * 100.0) if float(segment_total_rows[-1]["shipped_revenue"]) > 0 else 0.0
+                    segment_total_rows[-1]["order_share_segment_pct"] = 100.0
+                    segment_total_rows[-1]["revenue_share_segment_pct"] = 100.0
+                    segment_total_rows[-1]["shipped_order_share_segment_pct"] = 100.0
+                    segment_total_rows[-1]["shipped_revenue_share_segment_pct"] = 100.0
+                    segment_total_rows[-1]["budget_share_segment_pct"] = 100.0
 
-        df_base_show = pd.concat(
-            [df_base_show, pd.DataFrame(segment_total_rows + [total_row_raw])],
-            ignore_index=True,
+        extra_base_rows = pd.DataFrame.from_records(
+            segment_total_rows + [total_row_raw],
+            columns=df_base_show.columns,
+        )
+        df_base_show = pd.DataFrame.from_records(
+            df_base_show.to_dict("records") + extra_base_rows.to_dict("records"),
+            columns=df_base_show.columns,
         )
 
         df_base_show["impressions"] = df_base_show["impressions"].map(
@@ -4596,7 +4747,7 @@ with tab_plan:
             lambda x: "" if pd.isna(x) else f"{x:.2f} %"
         )
         df_base_show["ROAS"] = df_base_show["roas"].map(
-            lambda x: "" if pd.isna(x) else f"{x:.2f}"
+            lambda x: "" if pd.isna(x) else f"{x * 100:.2f} %"
         )
 
         if is_real_estate_preset:
@@ -4628,6 +4779,8 @@ with tab_plan:
                 "drr_pct",
                 "ROAS",
             ]
+        if is_diy_preset:
+            base_show_cols.insert(3, "segment")
         if is_diy_preset:
             df_base_show["available_capacity"] = df_base_show["available_capacity"].map(
                 lambda x: "" if pd.isna(x) else f"{round(x):,}".replace(",", " ")
@@ -4665,7 +4818,7 @@ with tab_plan:
             df_base_show["budget_share_segment_pct"] = df_base_show["budget_share_segment_pct"].map(
                 lambda x: "" if pd.isna(x) else f"{x:.2f} %"
             )
-            base_show_cols = get_diy_grouped_display_cols("campaign_type", include_context=True)
+            base_show_cols += ["available_capacity", "client_count", "absolute_new_clients", "returned_clients", "new_clients", "cac", "order_frequency", "shipped_orders", "shipped_cps", "shipped_aov", "shipped_revenue", "shipped_roas", "shipped_drr_pct", "shipped_order_share_segment_pct", "shipped_revenue_share_segment_pct", "sov_pct", "new_clients_share_pct", "order_share_segment_pct", "revenue_share_segment_pct", "budget_share_segment_pct"]
         # Порядок метрик задан под бизнес-логику проверки.
         df_base_show = safe_select_columns(df_base_show, base_show_cols, fill_value="")
         df_base_show = df_base_show.rename(columns=DISPLAY_COL_RENAME)
@@ -4675,6 +4828,9 @@ with tab_plan:
                 DISPLAY_COL_RENAME["campaign_type"],
                 DISPLAY_COL_RENAME["segment"],
             )
+        # Дальше в итоговую строку записываются уже форматированные строки,
+        # поэтому заранее переводим display-таблицу в object.
+        df_base_show = df_base_show.astype(object)
         # Принудительно фиксируем значения в последней строке Итого (после всех преобразований).
         if len(df_base_show) > 0:
             li = len(df_base_show) - 1
@@ -4733,7 +4889,7 @@ with tab_plan:
             if DISPLAY_COL_RENAME["cpql"] in df_base_show.columns:
                 df_base_show.at[li, DISPLAY_COL_RENAME["cpql"]] = f"{round(total_cpql):,} ₽".replace(",", " ")
             if "ROAS" in df_base_show.columns:
-                df_base_show.at[li, "ROAS"] = f"{total_roas:.2f}"
+                df_base_show.at[li, "ROAS"] = f"{total_roas * 100:.2f} %"
             if DISPLAY_COL_RENAME["drr"] in df_base_show.columns:
                 df_base_show.at[li, DISPLAY_COL_RENAME["drr"]] = f"{total_drr:.2f} %"
             if DISPLAY_COL_RENAME["aov"] in df_base_show.columns:
@@ -4763,6 +4919,12 @@ with tab_plan:
             if DISPLAY_COL_RENAME["budget_share_segment_pct"] in df_base_show.columns:
                 df_base_show.at[li, DISPLAY_COL_RENAME["budget_share_segment_pct"]] = "100.00 %"
 
+        # Таблица уже полностью подготовлена для отображения,
+        # поэтому приводим значения к строкам и убираем NaN, чтобы Streamlit
+        # не ловил проблемы сериализации при смешении чисел и форматированных строк.
+        df_base_show = df_base_show.where(pd.notna(df_base_show), "")
+        df_base_show = df_base_show.astype(str)
+
         def highlight_total_row(row):
             style = [""] * len(row)
             camp_col = DISPLAY_COL_RENAME.get("campaign_type", "Название кампании")
@@ -4777,11 +4939,29 @@ with tab_plan:
                 ] * len(row)
             return style
 
-        styled_base = df_base_show.style
-        if is_diy_preset:
-            styled_base = apply_diy_block_styling(styled_base, list(df_base_show.columns))
-        styled_base = styled_base.apply(highlight_total_row, axis=1)
-        st.dataframe(styled_base, use_container_width=True)
+        styled_base = df_base_show.style.apply(highlight_total_row, axis=1)
+        st.dataframe(styled_base, width="stretch")
+
+    render_bottom_tab_switcher("Настройки расчета", "setup")
+
+with tab_plan:
+    st.markdown(
+        """
+        <div class="tab-intro">
+            <p>1) Используйте полный блок «Средний месяц» как опорную базу для всех помесячных расчетов.</p>
+            <p>2) Ниже работайте с коэффициентами и результатами по каждому выбранному месяцу.</p>
+            <p>3) Коэффициенты в помесячной таблице можно редактировать прямо в ячейках и сразу видеть эффект на результат.</p>
+            <p>4) После правок сверяйте TOTAL и переходите в «Диаграммы» для финальной проверки.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    ui_section_title("2. Средний месяц (базовые значения)")
+    if df_base.empty:
+        st.info("Нет данных для среднего месяца.")
+    else:
+        styled_base_plan = df_base_show.style.apply(highlight_total_row, axis=1)
+        st.dataframe(styled_base_plan, width="stretch")
 
     # ---------- 3. Коэффициенты и результаты по месяцам ----------
 
@@ -4790,7 +4970,9 @@ with tab_plan:
 
         coeff_values = {}
         for cs in coeff_sets:
-            cs_name = cs["name"]
+            cs_id = get_coeff_set_id_value(cs)
+            if not cs_id:
+                continue
             cs_type = normalize_coeff_set_type(cs.get("type", "Спрос (по запросам)"))
             df_res = cs.get("result")
             if df_res is None or df_res.empty:
@@ -4819,131 +5001,132 @@ with tab_plan:
                 except Exception:
                     continue
                 if metric_type == "custom":
-                    coeff_values[(cs_name, m, "demand")] = k
-                    coeff_values[(cs_name, m, "aov")] = float(
-                        r["Коэф. AOV"] if "Коэф. AOV" in df_res.columns else k
-                    )
+                    coeff_values[(cs_id, m, "demand")] = k
+                    coeff_values[(cs_id, m, "aov")] = k
                 else:
-                    coeff_values[(cs_name, m, metric_type)] = k
+                    coeff_values[(cs_id, m, metric_type)] = k
 
         def get_k_demand(campaign_type: str, month_num: int) -> float:
-            set_name = demand_link_map.get(campaign_type)
-            if not set_name:
+            set_id = demand_link_map.get(campaign_type)
+            if not set_id:
                 return 1.0
-            return coeff_values.get((set_name, month_num, "demand"), 1.0)
+            return coeff_values.get((set_id, month_num, "demand"), 1.0)
 
         def get_k_aov(campaign_type: str, month_num: int) -> float:
-            set_name = aov_link_map.get(campaign_type)
-            if not set_name:
+            set_id = aov_link_map.get(campaign_type)
+            if not set_id:
                 return 1.0
-            return coeff_values.get((set_name, month_num, "aov"), 1.0)
+            return coeff_values.get((set_id, month_num, "aov"), 1.0)
 
         def get_k_media_tail(campaign_type: str, month_num: int) -> float:
-            set_name = media_tail_link_map.get(campaign_type)
-            if not set_name:
+            set_id = media_tail_link_map.get(campaign_type)
+            if not set_id:
                 return 1.0
-            return coeff_values.get((set_name, month_num, "media_tail"), 1.0)
+            return coeff_values.get((set_id, month_num, "media_tail"), 1.0)
 
         def get_k_capacity(campaign_type: str, month_num: int) -> float:
-            set_name = capacity_link_map.get(campaign_type)
-            if not set_name:
-                set_name = demand_link_map.get(campaign_type, "")
-            if not set_name:
+            set_id = capacity_link_map.get(campaign_type)
+            if not set_id:
+                set_id = demand_link_map.get(campaign_type, "")
+            if not set_id:
                 return 1.0
-            if (set_name, month_num, "demand") in coeff_values:
-                return coeff_values[(set_name, month_num, "demand")]
-            if (set_name, month_num, "media_tail") in coeff_values:
-                return coeff_values[(set_name, month_num, "media_tail")]
-            if (set_name, month_num, "aov") in coeff_values:
-                return coeff_values[(set_name, month_num, "aov")]
+            if (set_id, month_num, "demand") in coeff_values:
+                return coeff_values[(set_id, month_num, "demand")]
+            if (set_id, month_num, "media_tail") in coeff_values:
+                return coeff_values[(set_id, month_num, "media_tail")]
+            if (set_id, month_num, "aov") in coeff_values:
+                return coeff_values[(set_id, month_num, "aov")]
             return 1.0
 
         def get_k_client_count(campaign_type: str, month_num: int) -> float:
-            set_name = client_count_link_map.get(campaign_type)
-            if not set_name:
-                set_name = capacity_link_map.get(campaign_type, "")
-            if not set_name:
-                set_name = demand_link_map.get(campaign_type, "")
-            if not set_name:
+            set_id = client_count_link_map.get(campaign_type)
+            if not set_id:
+                set_id = capacity_link_map.get(campaign_type, "")
+            if not set_id:
+                set_id = demand_link_map.get(campaign_type, "")
+            if not set_id:
                 return 1.0
-            if (set_name, month_num, "demand") in coeff_values:
-                return coeff_values[(set_name, month_num, "demand")]
-            if (set_name, month_num, "media_tail") in coeff_values:
-                return coeff_values[(set_name, month_num, "media_tail")]
-            if (set_name, month_num, "aov") in coeff_values:
-                return coeff_values[(set_name, month_num, "aov")]
+            if (set_id, month_num, "demand") in coeff_values:
+                return coeff_values[(set_id, month_num, "demand")]
+            if (set_id, month_num, "media_tail") in coeff_values:
+                return coeff_values[(set_id, month_num, "media_tail")]
+            if (set_id, month_num, "aov") in coeff_values:
+                return coeff_values[(set_id, month_num, "aov")]
             return 1.0
 
         def get_k_absolute_new_clients(campaign_type: str, month_num: int) -> float:
-            set_name = absolute_new_clients_link_map.get(campaign_type)
-            if not set_name:
-                set_name = client_count_link_map.get(campaign_type, "")
-            if not set_name:
-                set_name = capacity_link_map.get(campaign_type, "")
-            if not set_name:
-                set_name = demand_link_map.get(campaign_type, "")
-            if not set_name:
+            set_id = absolute_new_clients_link_map.get(campaign_type)
+            if not set_id:
+                set_id = client_count_link_map.get(campaign_type, "")
+            if not set_id:
+                set_id = capacity_link_map.get(campaign_type, "")
+            if not set_id:
+                set_id = demand_link_map.get(campaign_type, "")
+            if not set_id:
                 return 1.0
-            if (set_name, month_num, "demand") in coeff_values:
-                return coeff_values[(set_name, month_num, "demand")]
-            if (set_name, month_num, "media_tail") in coeff_values:
-                return coeff_values[(set_name, month_num, "media_tail")]
-            if (set_name, month_num, "aov") in coeff_values:
-                return coeff_values[(set_name, month_num, "aov")]
+            if (set_id, month_num, "demand") in coeff_values:
+                return coeff_values[(set_id, month_num, "demand")]
+            if (set_id, month_num, "media_tail") in coeff_values:
+                return coeff_values[(set_id, month_num, "media_tail")]
+            if (set_id, month_num, "aov") in coeff_values:
+                return coeff_values[(set_id, month_num, "aov")]
             return 1.0
 
         def get_k_returned_clients(campaign_type: str, month_num: int) -> float:
-            set_name = returned_clients_link_map.get(campaign_type)
-            if not set_name:
-                set_name = client_count_link_map.get(campaign_type, "")
-            if not set_name:
-                set_name = capacity_link_map.get(campaign_type, "")
-            if not set_name:
-                set_name = demand_link_map.get(campaign_type, "")
-            if not set_name:
+            set_id = returned_clients_link_map.get(campaign_type)
+            if not set_id:
+                set_id = client_count_link_map.get(campaign_type, "")
+            if not set_id:
+                set_id = capacity_link_map.get(campaign_type, "")
+            if not set_id:
+                set_id = demand_link_map.get(campaign_type, "")
+            if not set_id:
                 return 1.0
-            if (set_name, month_num, "demand") in coeff_values:
-                return coeff_values[(set_name, month_num, "demand")]
-            if (set_name, month_num, "media_tail") in coeff_values:
-                return coeff_values[(set_name, month_num, "media_tail")]
-            if (set_name, month_num, "aov") in coeff_values:
-                return coeff_values[(set_name, month_num, "aov")]
+            if (set_id, month_num, "demand") in coeff_values:
+                return coeff_values[(set_id, month_num, "demand")]
+            if (set_id, month_num, "media_tail") in coeff_values:
+                return coeff_values[(set_id, month_num, "media_tail")]
+            if (set_id, month_num, "aov") in coeff_values:
+                return coeff_values[(set_id, month_num, "aov")]
             return 1.0
 
         def get_k_order_frequency(campaign_type: str, month_num: int) -> float:
-            set_name = order_frequency_link_map.get(campaign_type)
-            if not set_name:
-                set_name = client_count_link_map.get(campaign_type, "")
-            if not set_name:
-                set_name = capacity_link_map.get(campaign_type, "")
-            if not set_name:
-                set_name = demand_link_map.get(campaign_type, "")
-            if not set_name:
+            set_id = order_frequency_link_map.get(campaign_type)
+            if not set_id:
+                set_id = client_count_link_map.get(campaign_type, "")
+            if not set_id:
+                set_id = capacity_link_map.get(campaign_type, "")
+            if not set_id:
+                set_id = demand_link_map.get(campaign_type, "")
+            if not set_id:
                 return 1.0
-            if (set_name, month_num, "demand") in coeff_values:
-                return coeff_values[(set_name, month_num, "demand")]
-            if (set_name, month_num, "media_tail") in coeff_values:
-                return coeff_values[(set_name, month_num, "media_tail")]
-            if (set_name, month_num, "aov") in coeff_values:
-                return coeff_values[(set_name, month_num, "aov")]
+            if (set_id, month_num, "demand") in coeff_values:
+                return coeff_values[(set_id, month_num, "demand")]
+            if (set_id, month_num, "media_tail") in coeff_values:
+                return coeff_values[(set_id, month_num, "media_tail")]
+            if (set_id, month_num, "aov") in coeff_values:
+                return coeff_values[(set_id, month_num, "aov")]
             return 1.0
 
         def get_k_reach(campaign_type: str, month_num: int) -> float:
-            set_name = demand_link_map.get(campaign_type, "")
-            if not set_name:
-                set_name = media_tail_link_map.get(campaign_type, "")
-            if not set_name:
+            set_id = demand_link_map.get(campaign_type, "")
+            if not set_id:
+                set_id = media_tail_link_map.get(campaign_type, "")
+            if not set_id:
                 return 1.0
-            if (set_name, month_num, "demand") in coeff_values:
-                return coeff_values[(set_name, month_num, "demand")]
-            if (set_name, month_num, "media_tail") in coeff_values:
-                return coeff_values[(set_name, month_num, "media_tail")]
+            if (set_id, month_num, "demand") in coeff_values:
+                return coeff_values[(set_id, month_num, "demand")]
+            if (set_id, month_num, "media_tail") in coeff_values:
+                return coeff_values[(set_id, month_num, "media_tail")]
             return 1.0
 
         all_months_results = []
 
-        for month in selected_month_nums:
-            month_name = month_names_full[month]
+        for period in selected_periods:
+            planning_slot = int(period["planning_slot"])
+            month = int(period["month_num"])
+            month_year = int(period["month_year"])
+            month_name = str(period["month_name"])
 
             coeff_rows = []
             base_capacity_map = {
@@ -4969,8 +5152,8 @@ with tab_plan:
             for _, base_row in campaigns.iterrows():
                 camp_type = str(base_row["campaign_type"])
 
-                k_demand = get_k_demand(camp_type, month)
-                k_media_tail = get_k_media_tail(camp_type, month)
+                k_demand = get_k_demand(camp_type, planning_slot)
+                k_media_tail = get_k_media_tail(camp_type, planning_slot)
                 el = elasticity_map.get(
                     camp_type,
                     {"cpc_div": 1.0, "ctr_div": 2.0, "cr_div": 10.0},
@@ -4985,13 +5168,13 @@ with tab_plan:
                 k_ctr = max(0.0, k_ctr)
                 k_cr = max(0.0, k_cr)
                 k_cr2 = max(0.0, k_cr2)
-                k_aov = get_k_aov(camp_type, month)
-                k_capacity = get_k_capacity(camp_type, month)
-                k_client_count = get_k_client_count(camp_type, month)
-                k_absolute_new_clients = get_k_absolute_new_clients(camp_type, month)
-                k_returned_clients = get_k_returned_clients(camp_type, month)
-                k_order_frequency = get_k_order_frequency(camp_type, month)
-                k_reach = get_k_reach(camp_type, month)
+                k_aov = get_k_aov(camp_type, planning_slot)
+                k_capacity = get_k_capacity(camp_type, planning_slot)
+                k_client_count = get_k_client_count(camp_type, planning_slot)
+                k_absolute_new_clients = get_k_absolute_new_clients(camp_type, planning_slot)
+                k_returned_clients = get_k_returned_clients(camp_type, planning_slot)
+                k_order_frequency = get_k_order_frequency(camp_type, planning_slot)
+                k_reach = get_k_reach(camp_type, planning_slot)
 
                 coeff_row = {
                     "campaign_type": camp_type,
@@ -5002,15 +5185,13 @@ with tab_plan:
                     "k_client_count": k_client_count,
                     "client_count": float(base_row.get("client_count_avg", 0.0) or 0.0) * k_client_count,
                     "k_absolute_new_clients": k_absolute_new_clients,
+                    "absolute_new_clients": float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0) * k_absolute_new_clients,
                     "k_returned_clients": k_returned_clients,
+                    "returned_clients": float(base_row.get("returned_clients_avg", 0.0) or 0.0) * k_returned_clients,
+                    "new_clients": (float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0) * k_absolute_new_clients)
+                    + (float(base_row.get("returned_clients_avg", 0.0) or 0.0) * k_returned_clients),
                     "k_order_frequency": k_order_frequency,
                     "order_frequency": float(base_row.get("order_frequency_avg", 0.0) or 0.0) * k_order_frequency,
-                    "new_clients_share_pct": (
-                        ((float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0) * k_absolute_new_clients)
-                        + (float(base_row.get("returned_clients_avg", 0.0) or 0.0) * k_returned_clients))
-                        / (float(base_row.get("client_count_avg", 0.0) or 0.0) * k_client_count) * 100.0
-                        if (float(base_row.get("client_count_avg", 0.0) or 0.0) * k_client_count) > 0 else 0.0
-                    ),
                     "k_ctr": k_ctr,
                     "k_cpc": k_cpc,
                     "k_cr": k_cr,
@@ -5025,7 +5206,7 @@ with tab_plan:
                 coeffs_default = coeffs_default.drop(columns=["k_aov"], errors="ignore")
             if not is_diy_preset:
                 coeffs_default = coeffs_default.drop(
-                    columns=["k_reach", "k_capacity", "available_capacity", "k_client_count", "client_count", "k_absolute_new_clients", "k_returned_clients", "k_order_frequency", "order_frequency"],
+                    columns=["k_reach", "k_capacity", "available_capacity", "k_client_count", "client_count", "k_absolute_new_clients", "absolute_new_clients", "k_returned_clients", "returned_clients", "new_clients", "k_order_frequency", "order_frequency"],
                     errors="ignore",
                 )
             else:
@@ -5033,18 +5214,16 @@ with tab_plan:
                     [
                         "campaign_type",
                         "k_imp",
+                        "k_reach",
                         "k_cpc",
                         "k_ctr",
                         "k_cr",
                         "k_aov",
                         "k_capacity",
-                        "available_capacity",
                         "k_client_count",
-                        "client_count",
                         "k_absolute_new_clients",
                         "k_returned_clients",
                         "k_order_frequency",
-                        "order_frequency",
                     ]
                 ]
             coeffs_month = coeffs_default.copy()
@@ -5053,7 +5232,7 @@ with tab_plan:
             rows = []
             # если хотим показывать детали по месяцам, создаём редактор
             if show_month_details:
-                st.markdown(f"#### Месяц {month}: {month_name}")
+                st.markdown(f"#### Месяц {planning_slot}: {month_name}")
                 col_left, col_right = st.columns([1.8, 1.0], vertical_alignment="top")
                 month_row_height = max(36, int(ui_table_row_px))
                 month_rows_count = max(len(coeffs_month), 1)
@@ -5062,10 +5241,10 @@ with tab_plan:
                     edited_coeffs_month = st.data_editor(
                         coeffs_month,
                         num_rows="fixed",
-                        use_container_width=True,
+                        width="stretch",
                         row_height=month_row_height,
                         height=month_table_height,
-                        key=f"coeffs_month_{month}_v2",
+                        key=f"coeffs_month_{planning_slot}_v2",
                         column_config={
                             "campaign_type": st.column_config.TextColumn(
                                 "Тип РК / Название", disabled=True, width="medium"
@@ -5103,18 +5282,10 @@ with tab_plan:
                                 disabled=not is_diy_preset,
                                 help=mhelp("k_capacity"),
                             ),
-                            "available_capacity": st.column_config.NumberColumn(
-                                "Доступная емкость", format="%.0f", width="small",
-                                disabled=True,
-                            ),
                             "k_client_count": st.column_config.NumberColumn(
                                 "k_client_count", format="%.2f", width="small",
                                 disabled=not is_diy_preset,
                                 help=mhelp("k_client_count"),
-                            ),
-                            "client_count": st.column_config.NumberColumn(
-                                "Количество клиентов", format="%.0f", width="small",
-                                disabled=True,
                             ),
                             "k_absolute_new_clients": st.column_config.NumberColumn(
                                 "k_absolute_new_clients", format="%.2f", width="small",
@@ -5131,14 +5302,6 @@ with tab_plan:
                                 disabled=not is_diy_preset,
                                 help=mhelp("k_order_frequency"),
                             ),
-                            "order_frequency": st.column_config.NumberColumn(
-                                "Частота заказа", format="%.2f", width="small",
-                                disabled=True,
-                            ),
-                            "new_clients_share_pct": st.column_config.NumberColumn(
-                                "Доля новых клиентов, %", format="%.2f", width="small",
-                                disabled=not is_diy_preset,
-                            ),
                         },
                     )
                     edited_coeffs_month = edited_coeffs_month.copy()
@@ -5147,41 +5310,6 @@ with tab_plan:
                     if not ((is_real_estate_preset and metric_mode["is_real_estate_full"]) or is_diy_preset) and "k_cr2" in edited_coeffs_month.columns:
                         edited_coeffs_month = edited_coeffs_month.drop(columns=["k_cr2"], errors="ignore")
                     edited_coeffs_month["campaign_type"] = edited_coeffs_month["campaign_type"].astype(str)
-                    if is_diy_preset and "available_capacity" in edited_coeffs_month.columns:
-                        edited_coeffs_month["available_capacity"] = edited_coeffs_month.apply(
-                            lambda r: float(base_capacity_map.get(str(r.get("campaign_type", "")), 0.0))
-                            * float(r.get("k_capacity", 1.0) or 1.0),
-                            axis=1,
-                        )
-                    if is_diy_preset and "client_count" in edited_coeffs_month.columns:
-                        edited_coeffs_month["client_count"] = edited_coeffs_month.apply(
-                            lambda r: float(base_client_count_map.get(str(r.get("campaign_type", "")), 0.0))
-                            * float(r.get("k_client_count", 1.0) or 1.0),
-                            axis=1,
-                        )
-                    if is_diy_preset and "absolute_new_clients" in edited_coeffs_month.columns:
-                        edited_coeffs_month["absolute_new_clients"] = edited_coeffs_month.apply(
-                            lambda r: float(base_absolute_new_clients_map.get(str(r.get("campaign_type", "")), 0.0))
-                            * float(r.get("k_absolute_new_clients", 1.0) or 1.0),
-                            axis=1,
-                        )
-                    if is_diy_preset and "returned_clients" in edited_coeffs_month.columns:
-                        edited_coeffs_month["returned_clients"] = edited_coeffs_month.apply(
-                            lambda r: float(base_returned_clients_map.get(str(r.get("campaign_type", "")), 0.0))
-                            * float(r.get("k_returned_clients", 1.0) or 1.0),
-                            axis=1,
-                        )
-                    if is_diy_preset and "new_clients" in edited_coeffs_month.columns:
-                        edited_coeffs_month["new_clients"] = (
-                            pd.to_numeric(edited_coeffs_month.get("absolute_new_clients", 0.0), errors="coerce").fillna(0.0)
-                            + pd.to_numeric(edited_coeffs_month.get("returned_clients", 0.0), errors="coerce").fillna(0.0)
-                        )
-                    if is_diy_preset and "order_frequency" in edited_coeffs_month.columns:
-                        edited_coeffs_month["order_frequency"] = edited_coeffs_month.apply(
-                            lambda r: float(base_order_frequency_map.get(str(r.get("campaign_type", "")), 0.0))
-                            * float(r.get("k_order_frequency", 1.0) or 1.0),
-                            axis=1,
-                        )
                     coeffs_month = edited_coeffs_month
             else:
                 # если подробности скрыты — берём coeffs_default как есть
@@ -5199,7 +5327,6 @@ with tab_plan:
                     absolute_new_clients_month = float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0)
                     returned_clients_month = float(base_row.get("returned_clients_avg", 0.0) or 0.0)
                     order_frequency_month = float(base_row.get("order_frequency_avg", 0.0) or 0.0)
-                    new_clients_share_month = 0.0
                 else:
                     k_row = k_row.iloc[0]
                     k_imp = float(k_row["k_imp"])
@@ -5219,10 +5346,6 @@ with tab_plan:
                     absolute_new_clients_month = float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0) * k_absolute_new_clients
                     returned_clients_month = float(base_row.get("returned_clients_avg", 0.0) or 0.0) * k_returned_clients
                     order_frequency_month = float(base_row.get("order_frequency_avg", 0.0) or 0.0) * k_order_frequency
-                    new_clients_share_month = (
-                        (float(absolute_new_clients_month) + float(returned_clients_month)) / float(client_count_month) * 100.0
-                        if float(client_count_month) > 0 else 0.0
-                    )
 
                 base = PlanInput(
                     impressions=base_row["impressions_avg"],
@@ -5249,7 +5372,9 @@ with tab_plan:
                 )
 
                 out = calculate_plan_month(month_inp)
+                out["planning_slot"] = planning_slot
                 out["month_num"] = month
+                out["month_year"] = month_year
                 out["month_name"] = month_name
                 out["campaign_type"] = campaign_type
                 out["segment"] = str(base_row.get("segment", "B2C"))
@@ -5267,7 +5392,7 @@ with tab_plan:
                     out["new_clients"] = absolute_new_clients_month + returned_clients_month
                     out["order_frequency"] = order_frequency_month
                     out["sov_pct"] = (float(out.get("reach", 0.0)) / available_capacity_month * 100.0) if available_capacity_month > 0 else 0.0
-                    out["new_clients_share_pct"] = new_clients_share_month
+                    out["new_clients_share_pct"] = calc_new_clients_share_pct(out["new_clients"], out["client_count"])
                     out["cac"] = (float(out.get("cost_with_vat_ak", 0.0)) / float(out.get("new_clients", 0.0))) if float(out.get("new_clients", 0.0)) > 0 else 0.0
                     out["shipped_orders"] = float(out.get("target_leads", 0.0) or 0.0)
                     out["shipped_revenue"] = float(out.get("shipped_orders", 0.0)) * float(out.get("aov", 0.0) or 0.0)
@@ -5307,7 +5432,10 @@ with tab_plan:
                         0.0,
                     )
                     shipped_budget_basis_month = pd.to_numeric(
-                        df_month.get("cost_with_vat_ak", 0.0),
+                        df_month.get(
+                            "cost_with_vat_ak" if use_vat_budget_metrics and use_ak_budget_metrics else "cost_with_vat" if use_vat_budget_metrics else "total_budget_wo_vat_ak" if use_ak_budget_metrics else "cost",
+                            0.0,
+                        ),
                         errors="coerce",
                     ).fillna(0.0)
                     df_month["shipped_roas"] = np.where(
@@ -5371,7 +5499,7 @@ with tab_plan:
                         total_cpa = (total_cost_with_vat / total_conv) if (is_diy_preset and total_conv > 0) else (total_budget_basis / total_conv) if total_conv > 0 else 0
                         total_cpl = (total_budget_basis / total_leads) if total_leads > 0 else 0
                         total_cpql = (total_cost_with_vat / total_target_leads) if (is_diy_preset and total_target_leads > 0) else (total_budget_basis / total_target_leads) if total_target_leads > 0 else 0
-                        total_roas = (total_rev / total_cost_with_vat_ak) if total_cost_with_vat_ak > 0 else 0
+                        total_roas = (total_rev / total_budget_basis) if total_budget_basis > 0 else 0
                         total_drr = (total_budget_basis / total_rev * 100) if total_rev > 0 else 0
 
                         total_row_month = {
@@ -5420,17 +5548,17 @@ with tab_plan:
                             total_row_month["new_clients"] = float(df_month["new_clients"].sum()) if "new_clients" in df_month.columns else 0.0
                             total_row_month["order_frequency"] = float(df_month["order_frequency"].mean()) if "order_frequency" in df_month.columns else 0.0
                             total_row_month["sov_pct"] = (total_reach / total_capacity * 100.0) if total_capacity > 0 else 0.0
-                            total_row_month["new_clients_share_pct"] = (
-                                float(total_row_month.get("new_clients", 0.0)) / float(total_row_month.get("client_count", 0.0)) * 100.0
-                                if float(total_row_month.get("client_count", 0.0)) > 0 else 0.0
+                            total_row_month["new_clients_share_pct"] = calc_new_clients_share_pct(
+                                total_row_month["new_clients"],
+                                total_row_month["client_count"],
                             )
                             total_row_month["cac"] = (total_cost_with_vat_ak / float(total_row_month["new_clients"])) if float(total_row_month["new_clients"]) > 0 else 0.0
                             total_row_month["shipped_orders"] = float(df_month["shipped_orders"].sum()) if "shipped_orders" in df_month.columns else 0.0
                             total_row_month["shipped_revenue"] = float(df_month["shipped_revenue"].sum()) if "shipped_revenue" in df_month.columns else 0.0
                             total_row_month["shipped_cps"] = (total_cost_with_vat / float(total_row_month["shipped_orders"])) if float(total_row_month["shipped_orders"]) > 0 else 0.0
                             total_row_month["shipped_aov"] = (float(total_row_month["shipped_revenue"]) / float(total_row_month["shipped_orders"])) if float(total_row_month["shipped_orders"]) > 0 else 0.0
-                            total_row_month["shipped_roas"] = (float(total_row_month["shipped_revenue"]) / total_cost_with_vat_ak) if total_cost_with_vat_ak > 0 else 0.0
-                            total_row_month["shipped_drr_pct"] = (total_cost_with_vat_ak / float(total_row_month["shipped_revenue"]) * 100.0) if float(total_row_month["shipped_revenue"]) > 0 else 0.0
+                            total_row_month["shipped_roas"] = (float(total_row_month["shipped_revenue"]) / total_budget_basis) if total_budget_basis > 0 else 0.0
+                            total_row_month["shipped_drr_pct"] = (total_budget_basis / float(total_row_month["shipped_revenue"]) * 100.0) if float(total_row_month["shipped_revenue"]) > 0 else 0.0
                             total_row_month["order_share_segment_pct"] = 100.0
                             total_row_month["revenue_share_segment_pct"] = 100.0
                             total_row_month["shipped_order_share_segment_pct"] = 100.0
@@ -5462,7 +5590,7 @@ with tab_plan:
                                 seg_cpa = (seg_cost_with_vat / seg_conv) if (is_diy_preset and seg_conv > 0) else (seg_budget_basis / seg_conv) if seg_conv > 0 else 0
                                 seg_cpl = (seg_budget_basis / seg_leads) if seg_leads > 0 else 0
                                 seg_cpql = (seg_budget_basis / seg_target_leads) if seg_target_leads > 0 else 0
-                                seg_roas = (seg_rev / seg_cost_with_vat_ak) if seg_cost_with_vat_ak > 0 else 0
+                                seg_roas = (seg_rev / seg_budget_basis) if seg_budget_basis > 0 else 0
                                 seg_drr = (seg_budget_basis / seg_rev * 100) if seg_rev > 0 else 0
                                 seg_row = {
                                     "campaign_type": f"Итого {seg_name}",
@@ -5510,22 +5638,22 @@ with tab_plan:
                                     seg_row["new_clients"] = float(seg_df["new_clients"].sum()) if "new_clients" in seg_df.columns else 0.0
                                     seg_row["order_frequency"] = float(seg_df["order_frequency"].mean()) if "order_frequency" in seg_df.columns else 0.0
                                     seg_row["sov_pct"] = (float(seg_row.get("reach", 0.0)) / seg_cap * 100.0) if seg_cap > 0 else 0.0
-                                    seg_row["new_clients_share_pct"] = (
-                                        float(seg_row.get("new_clients", 0.0)) / float(seg_row.get("client_count", 0.0)) * 100.0
-                                        if float(seg_row.get("client_count", 0.0)) > 0 else 0.0
+                                    seg_row["new_clients_share_pct"] = calc_new_clients_share_pct(
+                                        seg_row["new_clients"],
+                                        seg_row["client_count"],
                                     )
                                     seg_row["cac"] = (seg_cost_with_vat_ak / float(seg_row["new_clients"])) if float(seg_row["new_clients"]) > 0 else 0.0
                                     seg_row["shipped_orders"] = float(seg_df["shipped_orders"].sum()) if "shipped_orders" in seg_df.columns else 0.0
                                     seg_row["shipped_revenue"] = float(seg_df["shipped_revenue"].sum()) if "shipped_revenue" in seg_df.columns else 0.0
                                     seg_row["shipped_cps"] = (seg_cost_with_vat / float(seg_row["shipped_orders"])) if float(seg_row["shipped_orders"]) > 0 else 0.0
                                     seg_row["shipped_aov"] = (float(seg_row["shipped_revenue"]) / float(seg_row["shipped_orders"])) if float(seg_row["shipped_orders"]) > 0 else 0.0
-                                    seg_row["shipped_roas"] = (float(seg_row["shipped_revenue"]) / seg_cost_with_vat_ak) if seg_cost_with_vat_ak > 0 else 0.0
-                                    seg_row["shipped_drr_pct"] = (seg_cost_with_vat_ak / float(seg_row["shipped_revenue"]) * 100.0) if float(seg_row["shipped_revenue"]) > 0 else 0.0
-                                    seg_row["order_share_segment_pct"] = (seg_conv / total_conv * 100.0) if total_conv > 0 else 0.0
-                                    seg_row["revenue_share_segment_pct"] = (seg_rev / total_rev * 100.0) if total_rev > 0 else 0.0
-                                    seg_row["shipped_order_share_segment_pct"] = (float(seg_row["shipped_orders"]) / float(total_row_month.get("shipped_orders", 0.0)) * 100.0) if float(total_row_month.get("shipped_orders", 0.0)) > 0 else 0.0
-                                    seg_row["shipped_revenue_share_segment_pct"] = (float(seg_row["shipped_revenue"]) / float(total_row_month.get("shipped_revenue", 0.0)) * 100.0) if float(total_row_month.get("shipped_revenue", 0.0)) > 0 else 0.0
-                                    seg_row["budget_share_segment_pct"] = (seg_cost_with_vat_ak / total_cost_with_vat_ak * 100.0) if total_cost_with_vat_ak > 0 else 0.0
+                                    seg_row["shipped_roas"] = (float(seg_row["shipped_revenue"]) / seg_budget_basis) if seg_budget_basis > 0 else 0.0
+                                    seg_row["shipped_drr_pct"] = (seg_budget_basis / float(seg_row["shipped_revenue"]) * 100.0) if float(seg_row["shipped_revenue"]) > 0 else 0.0
+                                    seg_row["order_share_segment_pct"] = 100.0
+                                    seg_row["revenue_share_segment_pct"] = 100.0
+                                    seg_row["shipped_order_share_segment_pct"] = 100.0
+                                    seg_row["shipped_revenue_share_segment_pct"] = 100.0
+                                    seg_row["budget_share_segment_pct"] = 100.0
                                 segment_total_rows_month.append(seg_row)
 
                         # Основная таблица: только типы РК (без TOTAL), чтобы построчно
@@ -5622,7 +5750,7 @@ with tab_plan:
                             lambda x: "" if pd.isna(x) else f"{x:.2f} %"
                         )
                         df_rows_show["ROAS"] = df_rows_show["roas"].map(
-                            lambda x: "" if pd.isna(x) else f"{x:.2f}"
+                            lambda x: "" if pd.isna(x) else f"{x * 100:.2f} %"
                         )
                         if is_diy_preset:
                             df_rows_show["available_capacity"] = df_rows_show["available_capacity"].map(
@@ -5664,6 +5792,8 @@ with tab_plan:
 
                         if is_real_estate_preset:
                             month_show_cols = ["campaign_type", "system", "format", "geo"] + get_real_estate_table_cols(metric_mode)
+                        elif is_diy_preset:
+                            month_show_cols = ["campaign_type", "system", "format", "geo"] + get_diy_plan_table_cols()
                         else:
                             month_show_cols = [
                                 "campaign_type",
@@ -5692,7 +5822,7 @@ with tab_plan:
                                 "ROAS",
                             ]
                         if is_diy_preset:
-                            month_show_cols = get_diy_grouped_display_cols("campaign_type", include_context=True)
+                            month_show_cols.insert(3, "segment")
                         df_rows_show = safe_select_columns(df_rows_show, month_show_cols, fill_value="")
                         df_rows_show = df_rows_show.rename(columns=DISPLAY_COL_RENAME)
 
@@ -5747,7 +5877,7 @@ with tab_plan:
                         if "cr2_pct" in total_month_show.columns:
                             total_month_show["cr2_pct"] = total_month_show["cr2_pct"].map(lambda x: f"{x:.2f} %")
                         total_month_show["drr_pct"] = total_month_show["drr_pct"].map(lambda x: f"{x:.2f} %")
-                        total_month_show["ROAS"] = total_month_show["roas"].map(lambda x: f"{x:.2f}")
+                        total_month_show["ROAS"] = total_month_show["roas"].map(lambda x: f"{x * 100:.2f} %")
                         if is_diy_preset:
                             total_month_show["available_capacity"] = total_month_show["available_capacity"].map(
                                 lambda x: f"{round(x):,}".replace(",", " ")
@@ -5759,6 +5889,8 @@ with tab_plan:
                             total_month_show["budget_share_segment_pct"] = total_month_show["budget_share_segment_pct"].map(lambda x: f"{x:.2f} %")
                         if is_real_estate_preset:
                             total_month_cols = ["campaign_type", "system", "format", "geo"] + get_real_estate_table_cols(metric_mode)
+                        elif is_diy_preset:
+                            total_month_cols = ["campaign_type", "system", "format", "geo"] + get_diy_plan_table_cols()
                         else:
                             total_month_cols = [
                                 "campaign_type", "system", "format", "geo",
@@ -5767,7 +5899,7 @@ with tab_plan:
                                 "conversions", "cpa", "aov", "revenue", "drr_pct", "ROAS",
                             ]
                         if is_diy_preset:
-                            total_month_cols = get_diy_grouped_display_cols("campaign_type", include_context=True)
+                            total_month_cols.insert(3, "segment")
                         total_month_show = safe_select_columns(total_month_show, total_month_cols, fill_value="").rename(columns=DISPLAY_COL_RENAME)
 
                         # Простой вариант: возвращаем TOTAL обратно в основную таблицу.
@@ -5778,6 +5910,11 @@ with tab_plan:
                                 DISPLAY_COL_RENAME["campaign_type"],
                                 DISPLAY_COL_RENAME["segment"],
                             )
+
+                        # Это display-таблица: приводим всё к строкам, чтобы не смешивать
+                        # float и форматированные строковые значения в одних и тех же колонках.
+                        df_month_with_total_show = df_month_with_total_show.where(pd.notna(df_month_with_total_show), "")
+                        df_month_with_total_show = df_month_with_total_show.astype(str)
 
                         def _highlight_total_row_merged(row):
                             style = [""] * len(row)
@@ -5797,13 +5934,9 @@ with tab_plan:
                             140,
                             min(560, month_table_height + month_row_height + 4),
                         )
-                        styled_month = df_month_with_total_show.style
-                        if is_diy_preset:
-                            styled_month = apply_diy_block_styling(styled_month, list(df_month_with_total_show.columns))
-                        styled_month = styled_month.apply(_highlight_total_row_merged, axis=1)
                         st.dataframe(
-                            styled_month,
-                            use_container_width=True,
+                            df_month_with_total_show.style.apply(_highlight_total_row_merged, axis=1),
+                            width="stretch",
                             height=month_table_height_with_total,
                         )
                     else:
@@ -5839,7 +5972,7 @@ with tab_plan:
         ref_cpo = (ref_budget_basis / ref_conv) if ref_conv > 0 else 0.0
         ref_cpl = (ref_budget_basis / ref_leads) if ref_leads > 0 else 0.0
         ref_cpql = (ref_budget_basis / ref_target_leads) if ref_target_leads > 0 else 0.0
-        ref_roas = (ref_rev / ref_cost_with_vat_ak) if ref_cost_with_vat_ak > 0 else 0.0
+        ref_roas = (ref_rev / ref_budget_basis * 100.0) if ref_budget_basis > 0 else 0.0
         ref_drr = (ref_budget_basis / ref_rev * 100.0) if ref_rev > 0 else 0.0
         st.session_state["mp_ref_total"] = {
             "impressions": ref_imp,
@@ -5902,7 +6035,7 @@ with tab_plan:
             cpo = (budget_basis / conv) if conv > 0 else 0.0
             cpl = (budget_basis / leads) if leads > 0 else 0.0
             cpql = (budget_basis / target_leads) if target_leads > 0 else 0.0
-            roas = (rev / cost_with_vat_ak) if cost_with_vat_ak > 0 else 0.0
+            roas = (rev / budget_basis * 100.0) if budget_basis > 0 else 0.0
             drr = (budget_basis / rev * 100.0) if rev > 0 else 0.0
             total_by_campaign[camp] = {
                 "impressions": imp,
@@ -5985,7 +6118,7 @@ with tab_plan:
 
         if ref_mode != "Выключено":
             if ref_src:
-                st.dataframe(_build_ref_df(ref_src), use_container_width=True, hide_index=True)
+                st.dataframe(_build_ref_df(ref_src), width="stretch", hide_index=True)
             else:
                 st.caption("Нет данных для выбранного режима сверки.")
 
@@ -5995,7 +6128,7 @@ with tab_plan:
         else:
             st.caption("Сводные показатели по всем выбранным месяцам и типам РК.")
 
-            agg = df_all.groupby(["month_num", "month_name"], as_index=False).agg(
+            agg = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"], as_index=False).agg(
                 impressions=("impressions", "sum"),
                 clicks=("clicks", "sum"),
                 conversions=("conversions", "sum"),
@@ -6008,23 +6141,20 @@ with tab_plan:
                 revenue=("revenue", "sum"),
             )
             if is_diy_preset:
-                agg["reach"] = df_all.groupby(["month_num", "month_name"])["reach"].sum().values if "reach" in df_all.columns else 0.0
+                agg["reach"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["reach"].sum().values if "reach" in df_all.columns else 0.0
                 agg["frequency"] = np.where(agg["reach"] > 0, agg["impressions"] / agg["reach"], 0.0)
-                agg["available_capacity"] = df_all.groupby(["month_num", "month_name"])["available_capacity"].sum().values if "available_capacity" in df_all.columns else 0.0
-                agg["client_count"] = df_all.groupby(["month_num", "month_name"])["client_count"].sum().values if "client_count" in df_all.columns else 0.0
-                agg["absolute_new_clients"] = df_all.groupby(["month_num", "month_name"])["absolute_new_clients"].sum().values if "absolute_new_clients" in df_all.columns else 0.0
-                agg["returned_clients"] = df_all.groupby(["month_num", "month_name"])["returned_clients"].sum().values if "returned_clients" in df_all.columns else 0.0
-                agg["new_clients"] = df_all.groupby(["month_num", "month_name"])["new_clients"].sum().values if "new_clients" in df_all.columns else 0.0
-                agg["order_frequency"] = df_all.groupby(["month_num", "month_name"])["order_frequency"].mean().values if "order_frequency" in df_all.columns else 0.0
+                agg["available_capacity"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["available_capacity"].sum().values if "available_capacity" in df_all.columns else 0.0
+                agg["client_count"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["client_count"].sum().values if "client_count" in df_all.columns else 0.0
+                agg["absolute_new_clients"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["absolute_new_clients"].sum().values if "absolute_new_clients" in df_all.columns else 0.0
+                agg["returned_clients"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["returned_clients"].sum().values if "returned_clients" in df_all.columns else 0.0
+                agg["new_clients"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["new_clients"].sum().values if "new_clients" in df_all.columns else 0.0
+                agg["order_frequency"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["order_frequency"].mean().values if "order_frequency" in df_all.columns else 0.0
                 agg["sov_pct"] = np.where(agg["available_capacity"] > 0, agg["reach"] / agg["available_capacity"] * 100.0, 0.0)
-                if "client_count" in agg.columns and "new_clients" in agg.columns:
-                    agg["new_clients_share_pct"] = np.where(
-                        agg["client_count"] > 0,
-                        agg["new_clients"] / agg["client_count"] * 100.0,
-                        0.0,
-                    )
-                else:
-                    agg["new_clients_share_pct"] = 0.0
+                agg["new_clients_share_pct"] = np.where(
+                    agg["client_count"] > 0,
+                    agg["new_clients"] / agg["client_count"] * 100.0,
+                    0.0,
+                )
                 agg["order_share_segment_pct"] = 0.0
                 agg["revenue_share_segment_pct"] = 0.0
             if use_ak_budget_metrics:
@@ -6098,7 +6228,9 @@ with tab_plan:
             agg["cr_pct"] = agg["cr"]
 
             total_row = {
+                "planning_slot": 999,
                 "month_num": 999,
+                "month_year": 999,
                 "month_name": "TOTAL",
                 "impressions": agg["impressions"].sum(),
                 "reach": float(agg["reach"].sum()) if "reach" in agg.columns else 0.0,
@@ -6167,10 +6299,7 @@ with tab_plan:
                 total_row["new_clients"] = float(agg["new_clients"].sum()) if "new_clients" in agg.columns else 0.0
                 total_row["order_frequency"] = float(agg["order_frequency"].mean()) if "order_frequency" in agg.columns else 0.0
                 total_row["sov_pct"] = (total_row["reach"] / total_row["available_capacity"] * 100.0) if total_row["available_capacity"] > 0 else 0.0
-                total_row["new_clients_share_pct"] = (
-                    float(total_row.get("new_clients", 0.0)) / float(total_row.get("client_count", 0.0)) * 100.0
-                    if float(total_row.get("client_count", 0.0)) > 0 else 0.0
-                )
+                total_row["new_clients_share_pct"] = calc_new_clients_share_pct(total_row["new_clients"], total_row["client_count"])
                 total_row["cac"] = (total_row["cost_with_vat_ak"] / float(total_row["new_clients"])) if float(total_row["new_clients"]) > 0 else 0.0
                 total_row["order_share_segment_pct"] = 100.0
                 total_row["revenue_share_segment_pct"] = 100.0
@@ -6187,7 +6316,9 @@ with tab_plan:
                     else:
                         seg_budget_basis = seg_cost_with_vat if use_vat_budget_metrics else seg_cost
                     seg_row = {
+                        "planning_slot": 998,
                         "month_num": 998,
+                        "month_year": 998,
                         "month_name": f"Итого {seg_name}",
                         "impressions": float(seg_df["impressions"].sum()),
                         "reach": float(seg_df["reach"].sum()) if "reach" in seg_df.columns else 0.0,
@@ -6227,21 +6358,67 @@ with tab_plan:
                         seg_row["new_clients"] = float(seg_df["new_clients"].sum()) if "new_clients" in seg_df.columns else 0.0
                         seg_row["order_frequency"] = float(seg_df["order_frequency"].mean()) if "order_frequency" in seg_df.columns else 0.0
                         seg_row["sov_pct"] = (seg_row["reach"] / seg_row["available_capacity"] * 100.0) if seg_row["available_capacity"] > 0 else 0.0
-                        seg_row["new_clients_share_pct"] = (
-                            float(seg_row.get("new_clients", 0.0)) / float(seg_row.get("client_count", 0.0)) * 100.0
-                            if float(seg_row.get("client_count", 0.0)) > 0 else 0.0
-                        )
+                        seg_row["new_clients_share_pct"] = calc_new_clients_share_pct(seg_row["new_clients"], seg_row["client_count"])
                         seg_row["cac"] = (seg_row["cost_with_vat_ak"] / float(seg_row["new_clients"])) if float(seg_row["new_clients"]) > 0 else 0.0
                         seg_row["order_share_segment_pct"] = 100.0
                         seg_row["revenue_share_segment_pct"] = 100.0
                     segment_total_rows.append(seg_row)
 
-            agg = pd.concat([agg, pd.DataFrame(segment_total_rows + [total_row])], ignore_index=True)
+            extra_agg_rows = pd.DataFrame.from_records(
+                segment_total_rows + [total_row],
+                columns=agg.columns,
+            )
+            agg = pd.DataFrame.from_records(
+                agg.to_dict("records") + extra_agg_rows.to_dict("records"),
+                columns=agg.columns,
+            )
 
             if is_real_estate_preset:
                 agg_cols = ["month_name"] + get_real_estate_table_cols(metric_mode)
             elif is_diy_preset:
-                agg_cols = get_diy_grouped_agg_cols("month_name")
+                agg_cols = ["month_name"] + [
+                    "impressions",
+                    "reach",
+                    "frequency",
+                    "clicks",
+                    "ctr",
+                    "cpc",
+                    "cost",
+                    "ak_cost_wo_vat",
+                    "total_budget_wo_vat_ak",
+                    "cost_with_vat",
+                    "cost_with_vat_ak",
+                    "vat_amount",
+                    "ak_rate_pct",
+                    "cr",
+                    "conversions",
+                    "cpa",
+                    "cpm",
+                    "aov",
+                    "revenue",
+                    "roas",
+                    "drr",
+                    "available_capacity",
+                    "client_count",
+                    "absolute_new_clients",
+                    "returned_clients",
+                    "new_clients",
+                    "cac",
+                    "order_frequency",
+                    "shipped_orders",
+                    "shipped_cps",
+                    "shipped_aov",
+                    "shipped_revenue",
+                    "shipped_roas",
+                    "shipped_drr_pct",
+                    "shipped_order_share_segment_pct",
+                    "shipped_revenue_share_segment_pct",
+                    "sov_pct",
+                    "new_clients_share_pct",
+                    "order_share_segment_pct",
+                    "revenue_share_segment_pct",
+                    "budget_share_segment_pct",
+                ]
             else:
                 agg_cols = [
                     "month_name",
@@ -6271,8 +6448,8 @@ with tab_plan:
                 ]
             else:
                 numeric_cols = [
-                    "impressions", "reach", "frequency", "clicks", "conversions", "cost", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "cost_with_vat", "cost_with_vat_ak", "vat_amount", "revenue",
-                    "ctr", "cpc", "cr", "aov", "cpm", "cpa", "ROAS", "drr", "available_capacity", "client_count", "absolute_new_clients", "returned_clients", "new_clients", "cac", "order_frequency", "shipped_orders", "shipped_cps", "shipped_aov", "shipped_revenue", "shipped_roas", "shipped_drr_pct", "shipped_order_share_segment_pct", "shipped_revenue_share_segment_pct", "sov_pct", "new_clients_share_pct", "order_share_segment_pct", "revenue_share_segment_pct"
+                    "impressions", "reach", "frequency", "clicks", "conversions", "cost", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "cost_with_vat", "cost_with_vat_ak", "vat_amount", "ak_rate_pct", "revenue",
+                    "ctr", "cpc", "cr", "aov", "cpm", "cpa", "ROAS", "drr", "available_capacity", "client_count", "absolute_new_clients", "returned_clients", "new_clients", "cac", "order_frequency", "shipped_orders", "shipped_cps", "shipped_aov", "shipped_revenue", "shipped_roas", "shipped_drr_pct", "shipped_order_share_segment_pct", "shipped_revenue_share_segment_pct", "sov_pct", "new_clients_share_pct", "order_share_segment_pct", "revenue_share_segment_pct", "budget_share_segment_pct"
                 ]
             numeric_cols = [DISPLAY_COL_RENAME.get(c, c) for c in numeric_cols]
             numeric_cols = [c for c in numeric_cols if c in agg_show.columns]
@@ -6300,7 +6477,9 @@ with tab_plan:
                 for idx in vals.index:
                     t = (float(col.loc[idx]) - vmin) / span
                     color = _blend_hex(base_low, base_high, t)
-                    styles.loc[idx] = f"background-color: {color}; color: #EAF3EE;"
+                    styles.loc[idx] = (
+                        f"background-color: {color}; color: #EAF3EE; border: 1px solid {THEME_BORDER};"
+                    )
                 return styles
 
             def _highlight_total_row_total(row):
@@ -6330,6 +6509,7 @@ with tab_plan:
                 DISPLAY_COL_RENAME["cost_with_vat"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["cost_with_vat_ak"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["vat_amount"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
+                DISPLAY_COL_RENAME["ak_rate_pct"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
                 DISPLAY_COL_RENAME["revenue"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["aov"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["cpm"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
@@ -6347,7 +6527,7 @@ with tab_plan:
                 DISPLAY_COL_RENAME["shipped_cps"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["shipped_aov"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
                 DISPLAY_COL_RENAME["shipped_revenue"]: lambda x: "" if pd.isna(x) else f"{round(x):,} \u20BD".replace(",", " "),
-                DISPLAY_COL_RENAME["shipped_roas"]: lambda x: "" if pd.isna(x) else f"{x:.2f}",
+                DISPLAY_COL_RENAME["shipped_roas"]: lambda x: "" if pd.isna(x) else f"{x * 100:.2f} %",
                 DISPLAY_COL_RENAME["shipped_drr_pct"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
                 DISPLAY_COL_RENAME["shipped_order_share_segment_pct"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
                 DISPLAY_COL_RENAME["shipped_revenue_share_segment_pct"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
@@ -6360,25 +6540,24 @@ with tab_plan:
                 DISPLAY_COL_RENAME["new_clients_share_pct"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
                 DISPLAY_COL_RENAME["order_share_segment_pct"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
                 DISPLAY_COL_RENAME["revenue_share_segment_pct"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
+                DISPLAY_COL_RENAME["budget_share_segment_pct"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
                 DISPLAY_COL_RENAME["drr"]: lambda x: "" if pd.isna(x) else f"{x:.2f} %",
-                "ROAS": lambda x: "" if pd.isna(x) else f"{x:.2f}",
+                "ROAS": lambda x: "" if pd.isna(x) else f"{x * 100:.2f} %",
             }
             total_formatters = {k: v for k, v in total_formatters.items() if k in agg_show.columns}
             styled_total = (
                 agg_show.style
                 .format(total_formatters)
+                .apply(_highlight_total_row_total, axis=1)
             )
-            if is_diy_preset:
-                styled_total = apply_diy_block_styling(styled_total, list(agg_show.columns))
-            styled_total = styled_total.apply(_highlight_total_row_total, axis=1)
             for c in numeric_cols:
                 styled_total = styled_total.apply(_style_metric_col, axis=0, subset=[c])
 
-            st.dataframe(styled_total, use_container_width=True)
+            st.dataframe(styled_total, width="stretch")
 
     render_bottom_tab_switcher("Медиаплан", "plan")
 # ====================================================================
-#                           ТАБ «ДАГРАММЫ»
+#                           ТАБ «ДИАГРАММЫ»
 # ====================================================================
 
 with tab_charts:
@@ -6440,21 +6619,6 @@ with tab_charts:
             )
         )
 
-        month_names_full = {
-            1: "Январь",
-            2: "Февраль",
-            3: "Март",
-            4: "Апрель",
-            5: "Май",
-            6: "Июнь",
-            7: "Июль",
-            8: "Август",
-            9: "Сентябрь",
-            10: "Октябрь",
-            11: "Ноябрь",
-            12: "Декабрь",
-        }
-
         chart_campaign_palette = [
             "#0066E0", "#00CDC5", "#9747FF", "#FF6333",
             "#3D8EF0", "#42DDD6", "#B07BFF", "#FF8A66",
@@ -6472,8 +6636,17 @@ with tab_charts:
                 for idx, name in enumerate(ordered_names)
             }
 
-        available_months = sorted(df_all["month_num"].unique())
-        month_options = [f"{m}. {month_names_full[m]}" for m in available_months]
+        available_months_df = (
+            df_all[["planning_slot", "month_name"]]
+            .dropna(subset=["planning_slot"])
+            .drop_duplicates()
+            .sort_values("planning_slot")
+        )
+        month_options = [
+            f"{int(r['planning_slot'])}. {str(r['month_name'])}"
+            for _, r in available_months_df.iterrows()
+        ]
+        sync_multiselect_state("charts_months_multiselect", month_options, default_to_all=True)
 
         selected_labels = st.multiselect(
             "Месяцы в сводной таблице и диаграммах:",
@@ -6485,7 +6658,7 @@ with tab_charts:
         if not selected_labels:
             st.info("Выберите хотя бы один месяц.")
         else:
-            selected_month_nums_charts = [int(label.split(".")[0]) for label in selected_labels]
+            selected_month_slots_charts = [int(label.split(".")[0]) for label in selected_labels]
 
             all_campaign_types = df_all["campaign_type"].unique().tolist()
             campaign_color_map = _build_campaign_color_map(all_campaign_types)
@@ -6513,7 +6686,7 @@ with tab_charts:
                 if is_diy_preset and selected_segments_charts == []:
                     df_sel = pd.DataFrame()
                 else:
-                    mask = df_all["month_num"].isin(selected_month_nums_charts) & df_all[
+                    mask = df_all["planning_slot"].isin(selected_month_slots_charts) & df_all[
                         "campaign_type"
                     ].isin(selected_campaign_types)
                     if selected_segments_charts is not None:
@@ -6524,7 +6697,7 @@ with tab_charts:
                     st.info("Для выбранных месяцев и типов РК нет данных.")
                 else:
                     # ---------- Сводная таблица по месяцам ----------
-                    agg_m = df_sel.groupby(["month_num", "month_name"], as_index=False).agg(
+                    agg_m = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"], as_index=False).agg(
                         impressions=("impressions", "sum"),
                         clicks=("clicks", "sum"),
                         conversions=("conversions", "sum"),
@@ -6537,25 +6710,25 @@ with tab_charts:
                         revenue=("revenue", "sum"),
                     )
                     if is_diy_preset:
-                        agg_m["available_capacity"] = df_sel.groupby(["month_num", "month_name"])["available_capacity"].sum().values if "available_capacity" in df_sel.columns else 0.0
-                        agg_m["client_count"] = df_sel.groupby(["month_num", "month_name"])["client_count"].sum().values if "client_count" in df_sel.columns else 0.0
-                        agg_m["absolute_new_clients"] = df_sel.groupby(["month_num", "month_name"])["absolute_new_clients"].sum().values if "absolute_new_clients" in df_sel.columns else 0.0
-                        agg_m["returned_clients"] = df_sel.groupby(["month_num", "month_name"])["returned_clients"].sum().values if "returned_clients" in df_sel.columns else 0.0
-                        agg_m["new_clients"] = df_sel.groupby(["month_num", "month_name"])["new_clients"].sum().values if "new_clients" in df_sel.columns else 0.0
-                        agg_m["order_frequency"] = df_sel.groupby(["month_num", "month_name"])["order_frequency"].mean().values if "order_frequency" in df_sel.columns else 0.0
-                        agg_m["shipped_orders"] = df_sel.groupby(["month_num", "month_name"])["shipped_orders"].sum().values if "shipped_orders" in df_sel.columns else 0.0
-                        agg_m["shipped_revenue"] = df_sel.groupby(["month_num", "month_name"])["shipped_revenue"].sum().values if "shipped_revenue" in df_sel.columns else 0.0
+                        agg_m["reach"] = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"])["reach"].sum().values if "reach" in df_sel.columns else 0.0
+                        agg_m["frequency"] = np.where(agg_m["reach"] > 0, agg_m["impressions"] / agg_m["reach"], 0.0)
+                        agg_m["available_capacity"] = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"])["available_capacity"].sum().values if "available_capacity" in df_sel.columns else 0.0
+                        agg_m["client_count"] = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"])["client_count"].sum().values if "client_count" in df_sel.columns else 0.0
+                        agg_m["absolute_new_clients"] = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"])["absolute_new_clients"].sum().values if "absolute_new_clients" in df_sel.columns else 0.0
+                        agg_m["returned_clients"] = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"])["returned_clients"].sum().values if "returned_clients" in df_sel.columns else 0.0
+                        agg_m["new_clients"] = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"])["new_clients"].sum().values if "new_clients" in df_sel.columns else 0.0
+                        agg_m["order_frequency"] = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"])["order_frequency"].mean().values if "order_frequency" in df_sel.columns else 0.0
+                        agg_m["shipped_orders"] = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"])["shipped_orders"].sum().values if "shipped_orders" in df_sel.columns else 0.0
+                        agg_m["shipped_revenue"] = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"])["shipped_revenue"].sum().values if "shipped_revenue" in df_sel.columns else 0.0
+                        agg_m["sov_pct"] = np.where(agg_m["available_capacity"] > 0, agg_m["reach"] / agg_m["available_capacity"] * 100.0, 0.0)
+                        agg_m["new_clients_share_pct"] = np.where(agg_m["client_count"] > 0, agg_m["new_clients"] / agg_m["client_count"] * 100.0, 0.0)
                     if use_ak_budget_metrics:
                         budget_series = agg_m["cost_with_vat_ak"] if use_vat_budget_metrics else (agg_m["cost"] + agg_m["ak_cost_wo_vat"])
                     else:
                         budget_series = agg_m["cost_with_vat"] if use_vat_budget_metrics else agg_m["cost"]
                     agg_m["total_budget_wo_vat_ak"] = agg_m["cost"] + agg_m["ak_cost_wo_vat"]
                     agg_m["vat_amount"] = agg_m["cost_with_vat_ak"] - agg_m["total_budget_wo_vat_ak"]
-                    agg_m["ak_rate_pct"] = np.where(
-                        agg_m["cost"] > 0,
-                        agg_m["ak_cost_wo_vat"] / agg_m["cost"] * 100.0,
-                        0.0,
-                    )
+                    agg_m["ak_rate_pct"] = np.where(agg_m["cost"] > 0, agg_m["ak_cost_wo_vat"] / agg_m["cost"] * 100.0, 0.0)
 
                     agg_m["ctr"] = np.where(
                         agg_m["impressions"] > 0,
@@ -6618,14 +6791,9 @@ with tab_charts:
                         0.0,
                     )
                     if is_diy_preset:
-                        agg_m["new_clients_share_pct"] = np.where(
-                            agg_m["client_count"] > 0,
-                            agg_m["new_clients"] / agg_m["client_count"] * 100.0,
-                            0.0,
-                        )
-                        agg_m["cac"] = np.where(
-                            agg_m["new_clients"] > 0,
-                            agg_m["cost_with_vat_ak"] / agg_m["new_clients"],
+                        agg_m["cpa"] = np.where(
+                            agg_m["conversions"] > 0,
+                            agg_m["cost_with_vat"] / agg_m["conversions"],
                             0.0,
                         )
                         agg_m["shipped_cps"] = np.where(
@@ -6639,18 +6807,32 @@ with tab_charts:
                             0.0,
                         )
                         agg_m["shipped_roas"] = np.where(
-                            agg_m["cost_with_vat_ak"] > 0,
-                            agg_m["shipped_revenue"] / agg_m["cost_with_vat_ak"],
+                            budget_series > 0,
+                            agg_m["shipped_revenue"] / budget_series,
                             0.0,
                         )
                         agg_m["shipped_drr_pct"] = np.where(
                             agg_m["shipped_revenue"] > 0,
-                            agg_m["cost_with_vat_ak"] / agg_m["shipped_revenue"] * 100.0,
+                            budget_series / agg_m["shipped_revenue"] * 100.0,
+                            0.0,
+                        )
+                        agg_m["order_share_segment_pct"] = 100.0
+                        agg_m["revenue_share_segment_pct"] = 100.0
+                        agg_m["shipped_order_share_segment_pct"] = 100.0
+                        agg_m["shipped_revenue_share_segment_pct"] = 100.0
+                        agg_m["budget_share_segment_pct"] = 100.0
+                        agg_m["cac"] = np.where(
+                            agg_m["new_clients"] > 0,
+                            agg_m["cost_with_vat_ak"] / agg_m["new_clients"],
                             0.0,
                         )
 
-                    selected_month_nums_charts = sorted(selected_month_nums_charts)
-                    month_headers = [month_names_full[m] for m in selected_month_nums_charts]
+                    selected_month_slots_charts = sorted(selected_month_slots_charts)
+                    month_name_by_slot = {
+                        int(r["planning_slot"]): str(r["month_name"])
+                        for _, r in agg_m[["planning_slot", "month_name"]].drop_duplicates().iterrows()
+                    }
+                    month_headers = [month_name_by_slot.get(slot, str(slot)) for slot in selected_month_slots_charts]
 
                     # Коэффициенты, использованные в расчетах (в среднем по выбранным типам РК)
                     if "campaigns" in locals() and not campaigns.empty:
@@ -6714,8 +6896,8 @@ with tab_charts:
                                 agg_kwargs["k_cr2"] = ("k_cr2", "mean")
                             if not is_real_estate_preset:
                                 agg_kwargs["k_aov"] = ("k_aov", "mean")
-                            coeff_month = coeff_raw.groupby("month_num", as_index=False).agg(**agg_kwargs)
-                            coeff_month_map = coeff_month.set_index("month_num").to_dict("index")
+                            coeff_month = coeff_raw.groupby("planning_slot", as_index=False).agg(**agg_kwargs)
+                            coeff_month_map = coeff_month.set_index("planning_slot").to_dict("index")
 
                             # Отдельно показываем коэффициент "медийных хвостов" как значение из набора
                             # (без усреднения по типам РК)
@@ -6744,7 +6926,7 @@ with tab_charts:
                                 coeff_links_for_tail["campaign_type"].isin(selected_campaign_types)
                             ] if not coeff_links_for_tail.empty else pd.DataFrame()
 
-                            for m in selected_month_nums_charts:
+                            for m in selected_month_slots_charts:
                                 set_names = []
                                 if not coeff_links_for_tail.empty and "media_tail_set" in coeff_links_for_tail.columns:
                                     for _, rr in coeff_links_for_tail.iterrows():
@@ -6754,9 +6936,9 @@ with tab_charts:
 
                                 uniq_set_names = sorted(set(set_names))
                                 if len(uniq_set_names) == 1:
-                                    media_tail_month_map[m] = float(
-                                        media_tail_values_by_set.get(uniq_set_names[0], {}).get(m, 1.0)
-                                    )
+                                        media_tail_month_map[m] = float(
+                                            media_tail_values_by_set.get(uniq_set_names[0], {}).get(m, 1.0)
+                                        )
                                 elif len(uniq_set_names) == 0:
                                     media_tail_month_map[m] = 1.0
                                 else:
@@ -6775,24 +6957,24 @@ with tab_charts:
                                 coeff_labels.append(("k_aov", "Коэф. AOV"))
                             for key_name, label in coeff_labels:
                                 row = {"Метрика": label}
-                                for m in selected_month_nums_charts:
+                                for m in selected_month_slots_charts:
                                     val = coeff_month_map.get(m, {}).get(key_name, np.nan)
-                                    row[month_names_full[m]] = "" if pd.isna(val) else f"{val:.2f}"
+                                    row[month_name_by_slot.get(m, str(m))] = "" if pd.isna(val) else f"{val:.2f}"
                                 coeff_rows.append(row)
 
                             row_media_tail = {"Метрика": "Коэф. медийные хвосты"}
-                            for m in selected_month_nums_charts:
+                            for m in selected_month_slots_charts:
                                 v = media_tail_month_map.get(m, 1.0)
-                                row_media_tail[month_names_full[m]] = "неск." if v is None else f"{v:.2f}"
+                                row_media_tail[month_name_by_slot.get(m, str(m))] = "неск." if v is None else f"{v:.2f}"
                             coeff_rows.append(row_media_tail)
 
                             coeff_table = pd.DataFrame(coeff_rows).set_index("Метрика")
                             with st.expander("Коэффициенты, использованные в расчете по месяцам", expanded=False):
-                                st.dataframe(coeff_table, use_container_width=True)
+                                st.dataframe(coeff_table, width="stretch")
                             st.caption("Коэф. медийные хвосты: 1.00 = хвосты не применяются.")
 
                     # Транспонированная таблица: месяцы в колонках, метрики в строках
-                    agg_by_month = agg_m.set_index("month_num").to_dict("index")
+                    agg_by_month = agg_m.set_index("planning_slot").to_dict("index")
 
                     total_impressions = agg_m["impressions"].sum()
                     total_clicks = agg_m["clicks"].sum()
@@ -6815,10 +6997,6 @@ with tab_charts:
                         "cost": total_cost,
                         "cost_with_vat": total_cost_with_vat,
                         "cost_with_vat_ak": total_cost_with_vat_ak,
-                        "ak_cost_wo_vat": total_ak_wo_vat,
-                        "total_budget_wo_vat_ak": total_cost + total_ak_wo_vat,
-                        "vat_amount": total_cost_with_vat_ak - (total_cost + total_ak_wo_vat),
-                        "ak_rate_pct": (total_ak_wo_vat / total_cost * 100.0) if total_cost > 0 else 0.0,
                         "cr": (total_conversions / total_clicks * 100) if total_clicks > 0 else 0.0,
                         "cr1_pct": (float(agg_m["leads"].sum()) / total_clicks * 100) if total_clicks > 0 else 0.0,
                         "cr2_pct": (float(agg_m["target_leads"].sum()) / float(agg_m["leads"].sum()) * 100) if float(agg_m["leads"].sum()) > 0 else 0.0,
@@ -6834,26 +7012,41 @@ with tab_charts:
                         "drr": (total_budget_basis / total_revenue * 100) if total_revenue > 0 else 0.0,
                     }
                     if is_diy_preset:
+                        total_reach = float(agg_m["reach"].sum()) if "reach" in agg_m.columns else 0.0
+                        total_available_capacity = float(agg_m["available_capacity"].sum()) if "available_capacity" in agg_m.columns else 0.0
                         total_client_count = float(agg_m["client_count"].sum()) if "client_count" in agg_m.columns else 0.0
                         total_new_clients = float(agg_m["new_clients"].sum()) if "new_clients" in agg_m.columns else 0.0
                         total_shipped_orders = float(agg_m["shipped_orders"].sum()) if "shipped_orders" in agg_m.columns else 0.0
                         total_shipped_revenue = float(agg_m["shipped_revenue"].sum()) if "shipped_revenue" in agg_m.columns else 0.0
-                        total_metrics.update({
-                            "available_capacity": float(agg_m["available_capacity"].sum()) if "available_capacity" in agg_m.columns else 0.0,
-                            "client_count": total_client_count,
-                            "absolute_new_clients": float(agg_m["absolute_new_clients"].sum()) if "absolute_new_clients" in agg_m.columns else 0.0,
-                            "returned_clients": float(agg_m["returned_clients"].sum()) if "returned_clients" in agg_m.columns else 0.0,
-                            "new_clients": total_new_clients,
-                            "new_clients_share_pct": (total_new_clients / total_client_count * 100.0) if total_client_count > 0 else 0.0,
-                            "order_frequency": float(agg_m["order_frequency"].mean()) if "order_frequency" in agg_m.columns else 0.0,
-                            "cac": (total_cost_with_vat_ak / total_new_clients) if total_new_clients > 0 else 0.0,
-                            "shipped_orders": total_shipped_orders,
-                            "shipped_cps": (total_cost_with_vat / total_shipped_orders) if total_shipped_orders > 0 else 0.0,
-                            "shipped_roas": (total_shipped_revenue / total_cost_with_vat_ak) if total_cost_with_vat_ak > 0 else 0.0,
-                            "shipped_drr_pct": (total_cost_with_vat_ak / total_shipped_revenue * 100.0) if total_shipped_revenue > 0 else 0.0,
-                            "shipped_aov": (total_shipped_revenue / total_shipped_orders) if total_shipped_orders > 0 else 0.0,
-                            "shipped_revenue": total_shipped_revenue,
-                        })
+                        total_metrics.update(
+                            {
+                                "total_budget_wo_vat_ak": total_cost + total_ak_wo_vat,
+                                "vat_amount": total_cost_with_vat_ak - (total_cost + total_ak_wo_vat),
+                                "ak_rate_pct": (total_ak_wo_vat / total_cost * 100.0) if total_cost > 0 else 0.0,
+                                "reach": total_reach,
+                                "frequency": (total_impressions / total_reach) if total_reach > 0 else 0.0,
+                                "available_capacity": total_available_capacity,
+                                "client_count": total_client_count,
+                                "absolute_new_clients": float(agg_m["absolute_new_clients"].sum()) if "absolute_new_clients" in agg_m.columns else 0.0,
+                                "returned_clients": float(agg_m["returned_clients"].sum()) if "returned_clients" in agg_m.columns else 0.0,
+                                "new_clients": total_new_clients,
+                                "cac": (total_cost_with_vat_ak / total_new_clients) if total_new_clients > 0 else 0.0,
+                                "order_frequency": float(agg_m["order_frequency"].mean()) if "order_frequency" in agg_m.columns else 0.0,
+                                "shipped_orders": total_shipped_orders,
+                                "shipped_cps": (total_cost_with_vat / total_shipped_orders) if total_shipped_orders > 0 else 0.0,
+                                "shipped_aov": (total_shipped_revenue / total_shipped_orders) if total_shipped_orders > 0 else 0.0,
+                                "shipped_revenue": total_shipped_revenue,
+                                "shipped_roas": (total_shipped_revenue / total_budget_basis) if total_budget_basis > 0 else 0.0,
+                                "shipped_drr_pct": (total_budget_basis / total_shipped_revenue * 100.0) if total_shipped_revenue > 0 else 0.0,
+                                "shipped_order_share_segment_pct": 100.0,
+                                "shipped_revenue_share_segment_pct": 100.0,
+                                "sov_pct": (total_reach / total_available_capacity * 100.0) if total_available_capacity > 0 else 0.0,
+                                "new_clients_share_pct": calc_new_clients_share_pct(total_new_clients, total_client_count),
+                                "order_share_segment_pct": 100.0,
+                                "revenue_share_segment_pct": 100.0,
+                                "budget_share_segment_pct": 100.0,
+                            }
+                        )
 
                     def _fmt_int(v):
                         return f"{round(v):,}".replace(",", " ")
@@ -6868,44 +7061,12 @@ with tab_charts:
                         return f"{v:.2f} %"
 
                     def _fmt_mult(v):
-                        return f"{v:.2f}"
+                        return f"{v * 100:.2f} %"
 
                     if is_real_estate_preset:
                         metric_specs = get_real_estate_display_metric_specs(metric_mode)
                     elif is_diy_preset:
-                        metric_specs = [
-                            ("Показы", "impressions"),
-                            ("Бюджет, руб. без НДС", "cost"),
-                            ("АК, %", "ak_rate_pct"),
-                            ("АК, руб. без НДС", "ak_cost_wo_vat"),
-                            ("Тотал бюджет, руб. без НДС и с учетом АК", "total_budget_wo_vat_ak"),
-                            ("Бюджет с НДС и АК", "cost_with_vat_ak"),
-                            ("НДС, руб.", "vat_amount"),
-                            ("Количество клиентов", "client_count"),
-                            ("Кол-во абсолютно новых клиентов", "absolute_new_clients"),
-                            ("Кол-во вернувшихся клиентов", "returned_clients"),
-                            ("Кол-во новых клиентов", "new_clients"),
-                            ("Доля новых клиентов, %", "new_clients_share_pct"),
-                            ("Частота заказа", "order_frequency"),
-                            ("CAC, руб.", "cac"),
-                            ("CTR, %", "ctr"),
-                            ("Клики", "clicks"),
-                            ("CPC, руб.", "cpc"),
-                            ("CR1, %", "cr"),
-                            ("Кол-во оформленных заказов", "conversions"),
-                            ("Стоимость оформл. заказа, руб. с НДС", "cpa"),
-                            ("ROAS оформл.", "roas"),
-                            ("ДРР от оформл. дохода, %", "drr"),
-                            ("Средний чек по оформл. доходу, с НДС", "aov"),
-                            ("Оформленный доход, руб. с НДС", "revenue"),
-                            ("CR2, %", "cr2_pct"),
-                            ("Кол-во отгруженных заказов", "shipped_orders"),
-                            ("Стоимость отгр. заказа, руб. с НДС", "shipped_cps"),
-                            ("ROAS отгр.", "shipped_roas"),
-                            ("ДРР от выручки, %", "shipped_drr_pct"),
-                            ("Средний чек по выручке, с НДС", "shipped_aov"),
-                            ("Выручка (отгруженный доход), руб. с НДС", "shipped_revenue"),
-                        ]
+                        metric_specs = get_diy_display_metric_specs()
                     else:
                         metric_specs = [
                             ("Показы", "impressions"),
@@ -6929,34 +7090,38 @@ with tab_charts:
                     for metric_label, metric_key in metric_specs:
                         row = {"Метрика": metric_label}
                         month_value_map = {}
-                        for m in selected_month_nums_charts:
-                            month_col = month_names_full[m]
+                        for m in selected_month_slots_charts:
+                            month_col = month_name_by_slot.get(m, str(m))
                             val = agg_by_month.get(m, {}).get(metric_key, 0.0)
                             month_value_map[month_col] = float(val)
-                            if metric_key in ["impressions", "clicks", "conversions", "leads", "target_leads", "client_count", "absolute_new_clients", "returned_clients", "new_clients", "available_capacity", "shipped_orders"]:
+                            if metric_key in ["impressions", "clicks", "conversions", "leads", "target_leads", "reach", "available_capacity", "client_count", "absolute_new_clients", "returned_clients", "new_clients", "shipped_orders"]:
                                 row[month_col] = _fmt_int(val)
-                            elif metric_key in ["cost", "cost_with_vat", "cost_with_vat_ak", "revenue", "cpm", "cpa", "aov", "cpl", "cpql", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "vat_amount", "cac", "shipped_cps", "shipped_aov", "shipped_revenue"]:
+                            elif metric_key in ["cost", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "cost_with_vat", "cost_with_vat_ak", "vat_amount", "revenue", "cpm", "cpa", "aov", "cpl", "cpql", "cac", "shipped_cps", "shipped_aov", "shipped_revenue"]:
                                 row[month_col] = _fmt_rub(val)
                             elif metric_key == "cpc":
                                 row[month_col] = _fmt_rub2(val)
-                            elif metric_key in ["ctr", "cr", "drr", "cr1_pct", "cr2_pct", "new_clients_share_pct", "shipped_drr_pct", "ak_rate_pct"]:
+                            elif metric_key in ["ctr", "cr", "drr", "cr1_pct", "cr2_pct", "ak_rate_pct", "shipped_drr_pct", "shipped_order_share_segment_pct", "shipped_revenue_share_segment_pct", "sov_pct", "new_clients_share_pct", "order_share_segment_pct", "revenue_share_segment_pct", "budget_share_segment_pct"]:
                                 row[month_col] = _fmt_pct(val)
-                            elif metric_key in ["roas", "shipped_roas", "order_frequency"]:
+                            elif metric_key in ["roas", "shipped_roas"]:
                                 row[month_col] = _fmt_mult(val)
+                            elif metric_key == "order_frequency":
+                                row[month_col] = f"{float(val):.2f}"
                             else:
                                 row[month_col] = val
 
                         total_val = total_metrics.get(metric_key, 0.0)
-                        if metric_key in ["impressions", "clicks", "conversions", "leads", "target_leads", "client_count", "absolute_new_clients", "returned_clients", "new_clients", "available_capacity", "shipped_orders"]:
+                        if metric_key in ["impressions", "clicks", "conversions", "leads", "target_leads", "reach", "available_capacity", "client_count", "absolute_new_clients", "returned_clients", "new_clients", "shipped_orders"]:
                             row["TOTAL"] = _fmt_int(total_val)
-                        elif metric_key in ["cost", "cost_with_vat", "cost_with_vat_ak", "revenue", "cpm", "cpa", "aov", "cpl", "cpql", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "vat_amount", "cac", "shipped_cps", "shipped_aov", "shipped_revenue"]:
+                        elif metric_key in ["cost", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "cost_with_vat", "cost_with_vat_ak", "vat_amount", "revenue", "cpm", "cpa", "aov", "cpl", "cpql", "cac", "shipped_cps", "shipped_aov", "shipped_revenue"]:
                             row["TOTAL"] = _fmt_rub(total_val)
                         elif metric_key == "cpc":
                             row["TOTAL"] = _fmt_rub2(total_val)
-                        elif metric_key in ["ctr", "cr", "drr", "cr1_pct", "cr2_pct", "new_clients_share_pct", "shipped_drr_pct", "ak_rate_pct"]:
+                        elif metric_key in ["ctr", "cr", "drr", "cr1_pct", "cr2_pct", "ak_rate_pct", "shipped_drr_pct", "shipped_order_share_segment_pct", "shipped_revenue_share_segment_pct", "sov_pct", "new_clients_share_pct", "order_share_segment_pct", "revenue_share_segment_pct", "budget_share_segment_pct"]:
                             row["TOTAL"] = _fmt_pct(total_val)
-                        elif metric_key in ["roas", "shipped_roas", "order_frequency"]:
+                        elif metric_key in ["roas", "shipped_roas"]:
                             row["TOTAL"] = _fmt_mult(total_val)
+                        elif metric_key == "order_frequency":
+                            row["TOTAL"] = f"{float(total_val):.2f}"
                         else:
                             row["TOTAL"] = _fmt_int(total_val)
                         rows.append(row)
@@ -7039,7 +7204,7 @@ with tab_charts:
                     with selector_col:
                         summary_editor = st.data_editor(
                             summary_selector_df,
-                            use_container_width=True,
+                            width="stretch",
                             hide_index=True,
                             column_config={
                                 "График": st.column_config.CheckboxColumn(
@@ -7051,7 +7216,7 @@ with tab_charts:
                             key="charts_summary_selector_editor",
                         )
                     with table_col:
-                        st.dataframe(styled_summary, use_container_width=True)
+                        st.dataframe(styled_summary, width="stretch")
 
                     selected_metrics_for_chart = summary_editor.loc[
                         summary_editor["График"].fillna(False),
@@ -7128,7 +7293,7 @@ with tab_charts:
                             legend_title_text="Метрика",
                         )
                         fig_selected_metrics.update_traces(line=dict(width=3))
-                        st.plotly_chart(fig_selected_metrics, use_container_width=True)
+                        st.plotly_chart(fig_selected_metrics, width="stretch")
                         if chart_note:
                             st.caption(chart_note)
                     else:
@@ -7201,7 +7366,7 @@ with tab_charts:
                                 plot_bgcolor="rgba(0,0,0,0)",
                                 font=dict(color=THEME_PLOT_TEXT),
                             )
-                            st.plotly_chart(fig_cost, use_container_width=True)
+                            st.plotly_chart(fig_cost, width="stretch")
 
                         with col_pie2:
                             fig_conv = px.pie(
@@ -7221,7 +7386,7 @@ with tab_charts:
                                 plot_bgcolor="rgba(0,0,0,0)",
                                 font=dict(color=THEME_PLOT_TEXT),
                             )
-                            st.plotly_chart(fig_conv, use_container_width=True)
+                            st.plotly_chart(fig_conv, width="stretch")
 
                         with col_pie3:
                             fig_rev = px.pie(
@@ -7241,7 +7406,7 @@ with tab_charts:
                                 plot_bgcolor="rgba(0,0,0,0)",
                                 font=dict(color=THEME_PLOT_TEXT),
                             )
-                            st.plotly_chart(fig_rev, use_container_width=True)
+                            st.plotly_chart(fig_rev, width="stretch")
 
                         if is_diy_preset and "segment" in df_sel.columns:
                             seg_work = df_sel.copy()
@@ -7295,7 +7460,7 @@ with tab_charts:
                                         plot_bgcolor="rgba(0,0,0,0)",
                                         font=dict(color=THEME_PLOT_TEXT),
                                     )
-                                    st.plotly_chart(fig_seg_budget, use_container_width=True)
+                                    st.plotly_chart(fig_seg_budget, width="stretch")
 
                                 with seg_pie2:
                                     fig_seg_rev = px.pie(
@@ -7314,7 +7479,7 @@ with tab_charts:
                                         plot_bgcolor="rgba(0,0,0,0)",
                                         font=dict(color=THEME_PLOT_TEXT),
                                     )
-                                    st.plotly_chart(fig_seg_rev, use_container_width=True)
+                                    st.plotly_chart(fig_seg_rev, width="stretch")
 
                                 with seg_pie3:
                                     fig_seg_orders = px.pie(
@@ -7333,7 +7498,7 @@ with tab_charts:
                                         plot_bgcolor="rgba(0,0,0,0)",
                                         font=dict(color=THEME_PLOT_TEXT),
                                     )
-                                    st.plotly_chart(fig_seg_orders, use_container_width=True)
+                                    st.plotly_chart(fig_seg_orders, width="stretch")
 
     render_bottom_tab_switcher("Диаграммы", "charts")
 
@@ -7370,23 +7535,17 @@ with tab_export:
     if "df_all" not in locals() or df_all.empty:
         st.info("Нет данных для экспорта. Сначала рассчитайте медиаплан на вкладке «Медиаплан».")
     else:
-        month_names_full = {
-            1: "Январь",
-            2: "Февраль",
-            3: "Март",
-            4: "Апрель",
-            5: "Май",
-            6: "Июнь",
-            7: "Июль",
-            8: "Август",
-            9: "Сентябрь",
-            10: "Октябрь",
-            11: "Ноябрь",
-            12: "Декабрь",
-        }
-
-        export_months_available = sorted(df_all["month_num"].dropna().astype(int).unique().tolist())
-        export_month_options = [f"{m}. {month_names_full.get(m, str(m))}" for m in export_months_available]
+        export_periods_df = (
+            df_all[["planning_slot", "month_name"]]
+            .dropna(subset=["planning_slot"])
+            .drop_duplicates()
+            .sort_values("planning_slot")
+        )
+        export_month_options = [
+            f"{int(r['planning_slot'])}. {str(r['month_name'])}"
+            for _, r in export_periods_df.iterrows()
+        ]
+        sync_multiselect_state("export_months_multiselect", export_month_options, default_to_all=True)
         export_month_labels = st.multiselect(
             "Месяцы для экспорта",
             options=export_month_options,
@@ -7407,8 +7566,8 @@ with tab_export:
         elif not export_ctypes_selected:
             st.info("Выберите хотя бы один тип РК.")
         else:
-            export_month_nums = [int(lbl.split(".")[0]) for lbl in export_month_labels]
-            export_mask = df_all["month_num"].isin(export_month_nums) & df_all["campaign_type"].isin(export_ctypes_selected)
+            export_month_slots = [int(lbl.split(".")[0]) for lbl in export_month_labels]
+            export_mask = df_all["planning_slot"].isin(export_month_slots) & df_all["campaign_type"].isin(export_ctypes_selected)
             df_export = df_all.loc[export_mask].copy()
 
             if df_export.empty:
@@ -7447,11 +7606,11 @@ with tab_export:
                 ).fillna(0.0)
 
                 dim_month = (
-                    bi_export_df[["month_num", "month_name"]]
-                    .dropna(subset=["month_num"])
+                    bi_export_df[["planning_slot", "month_num", "month_year", "month_name"]]
+                    .dropna(subset=["planning_slot"])
                     .drop_duplicates()
-                    .sort_values("month_num")
-                    .rename(columns={"month_num": "month_key"})
+                    .sort_values("planning_slot")
+                    .rename(columns={"planning_slot": "month_key"})
                     .reset_index(drop=True)
                 )
                 if not dim_month.empty:
@@ -7470,11 +7629,11 @@ with tab_export:
                     on=["campaign_type", "system", "format", "geo", "segment"],
                     how="left",
                 ).copy()
-                fact["month_key"] = pd.to_numeric(fact.get("month_num"), errors="coerce").fillna(0).astype(int)
+                fact["month_key"] = pd.to_numeric(fact.get("planning_slot"), errors="coerce").fillna(0).astype(int)
 
                 fact_cols = [
                     "month_key", "campaign_key",
-                    "month_num", "month_name", "campaign_type", "segment", "system", "format", "geo",
+                    "planning_slot", "month_num", "month_year", "month_name", "campaign_type", "segment", "system", "format", "geo",
                     "impressions", "reach", "frequency", "clicks", "orders", "conversions", "leads", "target_leads",
                     "cost", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "cost_with_vat", "cost_with_vat_ak", "vat_amount", "budget_basis",
                     "ctr", "cpc", "cr", "cr1", "cr2", "cpm", "cpa", "cpl", "cpql", "aov", "revenue", "roas", "drr",
@@ -7485,9 +7644,6 @@ with tab_export:
                     if c not in fact.columns:
                         fact[c] = np.nan
                 fact = fact[fact_cols].copy()
-                for metric_col in ["roas"]:
-                    if metric_col in fact.columns:
-                        fact[metric_col] = pd.to_numeric(fact[metric_col], errors="coerce").round(2)
 
                 dim_segment = (
                     bi_export_df[["segment"]]
@@ -7539,7 +7695,7 @@ with tab_export:
                 detail_engine = "xlsxwriter" if HAS_XLSXWRITER else "openpyxl"
                 with pd.ExcelWriter(detail_buf, engine=detail_engine) as writer:
                     detail_cols = [
-                        "month_num", "month_name", "campaign_type", "system", "format", "geo",
+                        "planning_slot", "month_num", "month_year", "month_name", "campaign_type", "system", "format", "geo",
                         "impressions", "reach", "frequency", "clicks", "ctr", "cpc", "cost", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "cost_with_vat",
                         "cost_with_vat_ak", "vat_amount", "ak_rate", "ak_rate_pct",
                         "cr", "cr1", "cr2", "conversions", "leads", "target_leads", "aov", "cpm", "cpa", "cpl", "cpql", "revenue", "roas", "drr",
@@ -7550,7 +7706,9 @@ with tab_export:
                             df_export[c] = np.nan
                     df_detail = safe_select_columns(df_export, detail_cols).rename(
                         columns={
-                            "month_num": "Месяц №",
+                            "planning_slot": "Месяц плана №",
+                            "month_num": "Календарный месяц №",
+                            "month_year": "Год",
                             "month_name": "Месяц",
                             "campaign_type": "Тип РК",
                             "system": "Система",
@@ -7582,7 +7740,7 @@ with tab_export:
                             "cpl": "CPL, ₽",
                             "cpql": "CPQL, ₽",
                             "revenue": "Выручка, ₽",
-                            "roas": "ROAS",
+                            "roas": "ROAS (доля)",
                             "drr": "ДРР (доля)",
                             "available_capacity": "Доступная емкость",
                             "client_count": "Количество клиентов",
@@ -7598,11 +7756,9 @@ with tab_export:
                             "budget_share_segment_pct": "Доля рекламного бюджета, %",
                         }
                     )
-                    if "ROAS" in df_detail.columns:
-                        df_detail["ROAS"] = pd.to_numeric(df_detail["ROAS"], errors="coerce").round(2)
                     df_detail.to_excel(writer, sheet_name="Детально", index=False)
 
-                    agg_month = df_export.groupby(["month_num", "month_name"], as_index=False).agg(
+                    agg_month = df_export.groupby(["planning_slot", "month_num", "month_year", "month_name"], as_index=False).agg(
                         impressions=("impressions", "sum"),
                         clicks=("clicks", "sum"),
                         conversions=("conversions", "sum"),
@@ -7613,7 +7769,7 @@ with tab_export:
                         ak_cost_wo_vat=("ak_cost_wo_vat", "sum"),
                         cost_with_vat_ak=("cost_with_vat_ak", "sum"),
                         revenue=("revenue", "sum"),
-                    ).sort_values("month_num")
+                    ).sort_values("planning_slot")
                     agg_month["ctr_pct"] = np.where(agg_month["impressions"] > 0, agg_month["clicks"] / agg_month["impressions"] * 100.0, 0.0)
                     agg_month["cpc"] = np.where(agg_month["clicks"] > 0, agg_month["cost"] / agg_month["clicks"], 0.0)
                     agg_month["cr_pct"] = np.where(agg_month["clicks"] > 0, agg_month["conversions"] / agg_month["clicks"] * 100.0, 0.0)
@@ -7629,12 +7785,13 @@ with tab_export:
                     agg_month["cpo"] = np.where(agg_month["conversions"] > 0, budget_series / agg_month["conversions"], 0.0)
                     agg_month["cpl"] = np.where(agg_month["leads"] > 0, budget_series / agg_month["leads"], 0.0)
                     agg_month["cpql"] = np.where(agg_month["target_leads"] > 0, budget_series / agg_month["target_leads"], 0.0)
-                    agg_month["roas_pct"] = np.where(agg_month["cost_with_vat_ak"] > 0, agg_month["revenue"] / agg_month["cost_with_vat_ak"], 0.0)
-                    agg_month["roas_pct"] = pd.to_numeric(agg_month["roas_pct"], errors="coerce").round(2)
+                    agg_month["roas_pct"] = np.where(budget_series > 0, agg_month["revenue"] / budget_series * 100.0, 0.0)
                     agg_month["drr_pct"] = np.where(agg_month["revenue"] > 0, budget_series / agg_month["revenue"] * 100.0, 0.0)
                     agg_month = agg_month.rename(
                         columns={
-                            "month_num": "Месяц №",
+                            "planning_slot": "Месяц плана №",
+                            "month_num": "Календарный месяц №",
+                            "month_year": "Год",
                             "month_name": "Месяц",
                             "impressions": "Показы",
                             "clicks": "Клики",
@@ -7655,7 +7812,7 @@ with tab_export:
                             "cpo": "CPO, ₽",
                             "cpl": "CPL, ₽",
                             "cpql": "CPQL, ₽",
-                            "roas_pct": "ROAS",
+                            "roas_pct": "ROAS, %",
                             "drr_pct": "ДРР, %",
                         }
                     )
@@ -7673,15 +7830,20 @@ with tab_export:
 
                 # ---------- 2) Экспорт в шаблон ----------
                 template_campaigns = campaigns[campaigns["campaign_type"].isin(export_ctypes_selected)].copy()
-                template_month_nums = sorted(export_month_nums)
-                if len(template_month_nums) > 12:
+                template_periods = (
+                    df_export[["planning_slot", "month_num", "month_year", "month_name"]]
+                    .drop_duplicates()
+                    .sort_values("planning_slot")
+                    .to_dict("records")
+                )
+                if len(template_periods) > 12:
                     st.warning("Для экспорта в шаблон используется максимум 12 месяцев.")
-                    template_month_nums = template_month_nums[:12]
+                    template_periods = template_periods[:12]
                 if len(template_campaigns) > 10:
                     st.warning("Для экспорта в шаблон используется максимум 10 типов РК (ограничение шаблона).")
                     template_campaigns = template_campaigns.head(10)
 
-                if not template_campaigns.empty and template_month_nums:
+                if not template_campaigns.empty and template_periods:
                     try:
                         export_preset_key = str(st.session_state.get("metric_preset_key", "ecom")).strip().lower()
                         if export_preset_key not in METRIC_PRESETS:
@@ -7696,7 +7858,7 @@ with tab_export:
                             tpl_buf_ecom = build_excel_from_template(
                                 df_all=df_export,
                                 campaigns=template_campaigns,
-                                selected_month_nums=template_month_nums,
+                                selected_periods=template_periods,
                                 template_kind="ecom",
                             )
                             st.download_button(
@@ -7715,7 +7877,7 @@ with tab_export:
                             tpl_buf_diy = build_excel_from_template(
                                 df_all=df_export,
                                 campaigns=template_campaigns,
-                                selected_month_nums=template_month_nums,
+                                selected_periods=template_periods,
                                 template_kind="diy",
                             )
                             st.download_button(
@@ -7734,7 +7896,7 @@ with tab_export:
                             tpl_buf_real_estate_simple = build_excel_from_template(
                                 df_all=df_export,
                                 campaigns=template_campaigns,
-                                selected_month_nums=template_month_nums,
+                                selected_periods=template_periods,
                                 template_kind="real_estate_simple",
                             )
                             st.download_button(
@@ -7753,7 +7915,7 @@ with tab_export:
                             tpl_buf_real_estate_full = build_excel_from_template(
                                 df_all=df_export,
                                 campaigns=template_campaigns,
-                                selected_month_nums=template_month_nums,
+                                selected_periods=template_periods,
                                 template_kind="real_estate_full",
                             )
                             st.download_button(
