@@ -616,6 +616,7 @@ def get_campaign_required_cols(metric_mode: dict) -> list[str]:
     if metric_mode.get("needs_aov"):
         required.append("aov_avg")
     if metric_mode.get("is_diy"):
+        required.append("shipped_aov_avg")
         required.append("reach_avg")
         required.append("cr2_avg_percent")
     elif metric_mode.get("is_real_estate_full"):
@@ -725,7 +726,7 @@ def get_diy_display_metric_specs() -> list[tuple[str, str]]:
         ("Конверсии", "conversions"),
         ("CPO", "cpa"),
         ("CPM", "cpm"),
-        ("AOV", "aov"),
+        ("Средний чек по оформл. доходу, с НДС", "aov"),
         ("Выручка", "revenue"),
         ("ROAS", "roas"),
         ("ДРР", "drr"),
@@ -738,7 +739,7 @@ def get_diy_display_metric_specs() -> list[tuple[str, str]]:
         ("Частота заказа", "order_frequency"),
         ("Кол-во отгруженных заказов", "shipped_orders"),
         ("Стоимость отгр. заказа, ₽ с НДС", "shipped_cps"),
-        ("Средний чек по выручке, с НДС", "shipped_aov"),
+        ("Средний чек по отгр. доходу, с НДС", "shipped_aov"),
         ("Выручка (отгруженный доход), ₽ с НДС", "shipped_revenue"),
         ("ROAS отгр.", "shipped_roas"),
         ("ДРР отгр., %", "shipped_drr_pct"),
@@ -793,6 +794,12 @@ def _bootstrap_reference_from_campaigns(campaigns_df: pd.DataFrame | None) -> No
             funnel_mode=metric_mode["real_estate_funnel_mode"],
         )
         out = calculate_plan_month(inp)
+        if metric_mode.get("is_diy"):
+            shipped_orders = float(out.get("target_leads", 0.0) or 0.0)
+            shipped_aov = max(0.0, parse_float_loose(row.get("shipped_aov_avg"), 0.0))
+            out["shipped_orders"] = shipped_orders
+            out["shipped_revenue"] = shipped_orders * shipped_aov
+            out["shipped_aov"] = shipped_aov
         camp = str(row.get("campaign_type", "")).strip()
         if not camp:
             continue
@@ -1306,7 +1313,7 @@ DISPLAY_COL_RENAME = {
     "shipped_revenue": "Выручка (отгруженный доход), ₽ с НДС",
     "shipped_roas": "ROAS отгр.",
     "shipped_drr_pct": "ДРР отгр., %",
-    "shipped_aov": "Средний чек по выручке, с НДС",
+    "shipped_aov": "Средний чек по отгр. доходу, с НДС",
     "shipped_revenue_share_segment_pct": "Доля выручки, %",
 }
 
@@ -1337,7 +1344,7 @@ METRIC_HELP = {
     "shipped_revenue": "Отгруженный доход = Кол-во отгруженных заказов × Средний чек.",
     "shipped_roas": "ROAS отгр. = Отгруженный доход / Бюджетная база.",
     "shipped_drr_pct": "ДРР отгр., % = Бюджетная база / Отгруженный доход × 100%.",
-    "shipped_aov": "Средний чек по выручке, с НДС = Отгруженный доход / Кол-во отгруженных заказов.",
+    "shipped_aov": "Средний чек по отгр. доходу, с НДС = Отгруженный доход / Кол-во отгруженных заказов.",
     "cpm": "CPM = Бюджетная база / (Показы / 1000). База зависит от режима НДС.",
     "cpo": "CPO = Бюджетная база / Конверсии. База зависит от режима НДС.",
     "roas": "ROAS, % = Доход / Бюджетная база × 100%. База зависит от режима НДС.",
@@ -1558,6 +1565,8 @@ TEMPLATE_PATHS_ECOM = [
     os.path.join(BASE_DIR, "Shablony-MP.xlsx"),
 ]
 TEMPLATE_PATHS_DIY = [
+    os.path.join(BASE_DIR, "templates", "Шаблоны МП DIY_актуальный.xlsx"),
+    os.path.join(BASE_DIR, "Шаблоны МП DIY_актуальный.xlsx"),
     os.path.join(BASE_DIR, "templates", "Шаблоны МП DIY.xlsx"),
     os.path.join(BASE_DIR, "Шаблоны МП DIY.xlsx"),
     os.path.join(BASE_DIR, "templates", "Shablony-MP-DIY.xlsx"),
@@ -1617,39 +1626,68 @@ def build_excel_from_template(df_all: pd.DataFrame,
     COL_SYSTEM = "B"
     COL_FORMAT = "C"
     COL_TARGETING = "D"
-    COL_PERIOD = "F"
-    COL_MODEL = "G"
-
-    COL_CPC = "H"
     is_real_estate_template = template_kind in {"real_estate_simple", "real_estate_full"}
     is_real_estate_full_template = template_kind == "real_estate_full"
-    COL_GEO = "K" if is_real_estate_template else None
-    COL_DEMAND_COEFF = "L" if is_real_estate_template else None
-    COL_OTHER = "M" if is_real_estate_template else None
-    COL_TOTAL_GEO = "X" if is_real_estate_template else None
+    is_diy_template = template_kind == "diy"
+
+    if is_diy_template:
+        COL_PERIOD = "G"
+        COL_MODEL = "H"
+        COL_CPC = "I"
+        COL_GEO = "E"
+        COL_DEMAND_COEFF = None
+        COL_OTHER = "M"
+        COL_TOTAL_GEO = "E"
+        COL_AK = "O"
+        COL_IMPRESSIONS = "V"
+        COL_CTR = "AH"
+        COL_CR = "AL"
+        COL_CR2 = "AW"
+        COL_AOV = "AS"
+        COL_SHIPPED_AOV = "BD"
+        COL_AVAILABLE_CAPACITY = "AE"
+        COL_FREQUENCY = "W"
+        COL_CLIENT_COUNT = "Y"
+        COL_ABSOLUTE_NEW_CLIENTS = "Z"
+        COL_RETURNED_CLIENTS = "AA"
+        COL_ORDER_FREQUENCY = "AC"
+        COL_NEW_CLIENTS_SHARE = None
+        COL_REACH = None
+    else:
+        COL_PERIOD = "F"
+        COL_MODEL = "G"
+        COL_CPC = "H"
+        COL_GEO = "K" if is_real_estate_template else None
+        COL_DEMAND_COEFF = "L" if is_real_estate_template else None
+        COL_OTHER = "M" if is_real_estate_template else None
+        COL_TOTAL_GEO = "X" if is_real_estate_template else None
+        COL_SHIPPED_AOV = None
+        COL_CLIENT_COUNT = None
+        COL_ABSOLUTE_NEW_CLIENTS = None
+        COL_RETURNED_CLIENTS = None
+        COL_ORDER_FREQUENCY = None
     if is_real_estate_template:
         COL_AK = "Q"
         COL_IMPRESSIONS = "V"
         COL_CTR = "AD"
         COL_CR = "AH"
         COL_CR2 = "AL" if is_real_estate_full_template else None
-    else:
+        COL_AOV = None
+        COL_NEW_CLIENTS_SHARE = None
+        COL_AVAILABLE_CAPACITY = None
+        COL_REACH = None
+        COL_FREQUENCY = None
+    elif not is_diy_template:
         COL_AK = "N"
         COL_IMPRESSIONS = "S"
         COL_CTR = "AA"
         COL_CR = "AE"
         COL_CR2 = None
-    # In DIY template AN is a formula column ("share of revenue"), while AOV is in AL.
-    if template_kind == "diy":
-        COL_AOV = "AL"
-    elif is_real_estate_template:
-        COL_AOV = None
-    else:
         COL_AOV = "AN"
-    COL_NEW_CLIENTS_SHARE = "W" if template_kind == "diy" else None
-    COL_AVAILABLE_CAPACITY = "X" if template_kind == "diy" else None
-    COL_REACH = "U" if template_kind == "diy" else None
-    COL_FREQUENCY = "T" if template_kind == "diy" else None
+        COL_NEW_CLIENTS_SHARE = None
+        COL_AVAILABLE_CAPACITY = None
+        COL_REACH = None
+        COL_FREQUENCY = None
 
     def _safe_text(v) -> str:
         if v is None:
@@ -1735,6 +1773,7 @@ def build_excel_from_template(df_all: pd.DataFrame,
 
     START_ROW_JAN, BLOCK_STEP, ROWS_PER_MONTH = _detect_periods_layout()
     START_ROW_TOTAL, ROWS_PER_MONTH_TOTAL = _detect_total_layout(ROWS_PER_MONTH)
+    period_rows_for_hide: list[int] = []
 
     def _write_period_row(row_excel: int, camp_row: pd.Series | None, row_data: pd.Series | None, period_str: str):
         ws.row_dimensions[row_excel].hidden = False
@@ -1767,6 +1806,16 @@ def build_excel_from_template(df_all: pd.DataFrame,
                 ws[f"{COL_REACH}{row_excel}"] = None
             if COL_FREQUENCY:
                 ws[f"{COL_FREQUENCY}{row_excel}"] = None
+            if COL_CLIENT_COUNT:
+                ws[f"{COL_CLIENT_COUNT}{row_excel}"] = None
+            if COL_ABSOLUTE_NEW_CLIENTS:
+                ws[f"{COL_ABSOLUTE_NEW_CLIENTS}{row_excel}"] = None
+            if COL_RETURNED_CLIENTS:
+                ws[f"{COL_RETURNED_CLIENTS}{row_excel}"] = None
+            if COL_ORDER_FREQUENCY:
+                ws[f"{COL_ORDER_FREQUENCY}{row_excel}"] = None
+            if COL_SHIPPED_AOV:
+                ws[f"{COL_SHIPPED_AOV}{row_excel}"] = None
             return
 
         impressions = float(row_data["impressions"])
@@ -1775,6 +1824,7 @@ def build_excel_from_template(df_all: pd.DataFrame,
         cr = float(row_data["cr1"] if is_real_estate_full_template else row_data["cr"])
         cr2 = float(row_data.get("cr2", 0.0) or 0.0)
         aov = float(row_data.get("aov", 0.0) or 0.0)
+        shipped_aov = float(row_data.get("shipped_aov", 0.0) or 0.0)
         ak_rate = float(row_data.get("ak_rate", 0.0))
         if pd.isna(ak_rate):
             ak_rate = 0.0
@@ -1796,6 +1846,11 @@ def build_excel_from_template(df_all: pd.DataFrame,
         frequency = float(row_data.get("frequency", 0.0) or 0.0)
         if pd.isna(frequency):
             frequency = (impressions / reach) if reach > 0 else 0.0
+        client_count = float(row_data.get("client_count", 0.0) or 0.0)
+        absolute_new_clients = float(row_data.get("absolute_new_clients", 0.0) or 0.0)
+        returned_clients = float(row_data.get("returned_clients", 0.0) or 0.0)
+        order_frequency_raw = row_data.get("order_frequency", 0.0)
+        order_frequency = None if pd.isna(order_frequency_raw) else float(order_frequency_raw or 0.0)
         demand_coeff = float(row_data.get("k_demand_applied", 1.0) or 1.0)
         if pd.isna(demand_coeff):
             demand_coeff = 1.0
@@ -1813,7 +1868,7 @@ def build_excel_from_template(df_all: pd.DataFrame,
             ws[f"{COL_OTHER}{row_excel}"] = None
         ws[f"{COL_IMPRESSIONS}{row_excel}"] = impressions
         ws[f"{COL_CTR}{row_excel}"] = ctr
-        ws[f"{COL_CPC}{row_excel}"] = cpc
+        ws[f"{COL_CPC}{row_excel}"] = (cpc / 1.22) if is_diy_template else cpc
         ws[f"{COL_AK}{row_excel}"] = ak_rate
         ws[f"{COL_CR}{row_excel}"] = cr
         if COL_CR2:
@@ -1828,6 +1883,16 @@ def build_excel_from_template(df_all: pd.DataFrame,
             ws[f"{COL_REACH}{row_excel}"] = reach
         if COL_FREQUENCY:
             ws[f"{COL_FREQUENCY}{row_excel}"] = frequency
+        if COL_CLIENT_COUNT:
+            ws[f"{COL_CLIENT_COUNT}{row_excel}"] = client_count
+        if COL_ABSOLUTE_NEW_CLIENTS:
+            ws[f"{COL_ABSOLUTE_NEW_CLIENTS}{row_excel}"] = absolute_new_clients
+        if COL_RETURNED_CLIENTS:
+            ws[f"{COL_RETURNED_CLIENTS}{row_excel}"] = returned_clients
+        if COL_ORDER_FREQUENCY:
+            ws[f"{COL_ORDER_FREQUENCY}{row_excel}"] = order_frequency
+        if COL_SHIPPED_AOV:
+            ws[f"{COL_SHIPPED_AOV}{row_excel}"] = shipped_aov
 
     def _write_total_row(row_excel: int, camp_row: pd.Series | None):
         ws_total.row_dimensions[row_excel].hidden = False
@@ -1907,6 +1972,8 @@ def build_excel_from_template(df_all: pd.DataFrame,
 
         if diy_period_rows is not None:
             b2c_rows, b2b_rows = diy_period_rows
+            period_rows_for_hide.extend(b2c_rows)
+            period_rows_for_hide.extend(b2b_rows)
             camps = campaigns.copy()
             camps["_seg"] = camps["segment"].map(_norm_segment)
             camps_b2c = camps[camps["_seg"] == "B2C"]
@@ -1924,6 +1991,7 @@ def build_excel_from_template(df_all: pd.DataFrame,
             for row_excel in b2b_rows[len(camps_b2b):]:
                 _write_period_row(row_excel, None, None, period_str)
         else:
+            period_rows_for_hide.extend(block_start_row + i for i in range(ROWS_PER_MONTH))
             for i, (_, camp) in enumerate(campaigns.iterrows()):
                 if i >= ROWS_PER_MONTH:
                     break
@@ -1935,29 +2003,31 @@ def build_excel_from_template(df_all: pd.DataFrame,
 
     if compact_empty_rows:
         rows_to_hide_periods = []
-        for block_index, _ in enumerate(selected_periods):
-            block_start_row = START_ROW_JAN + block_index * BLOCK_STEP
-            for i in range(ROWS_PER_MONTH):
-                row_excel = block_start_row + i
-                is_empty_main = (
-                    ws[f"{COL_SYSTEM}{row_excel}"].value in (None, "")
-                    and ws[f"{COL_FORMAT}{row_excel}"].value in (None, "")
-                    and ws[f"{COL_TARGETING}{row_excel}"].value in (None, "")
-                )
-                is_empty_metrics = (
-                    ws[f"{COL_IMPRESSIONS}{row_excel}"].value in (None, "")
-                    and ws[f"{COL_CTR}{row_excel}"].value in (None, "")
-                    and ws[f"{COL_CPC}{row_excel}"].value in (None, "")
-                    and ws[f"{COL_AK}{row_excel}"].value in (None, "")
-                    and ws[f"{COL_CR}{row_excel}"].value in (None, "")
-                    and (not COL_AOV or ws[f"{COL_AOV}{row_excel}"].value in (None, ""))
-                    and (not COL_NEW_CLIENTS_SHARE or ws[f"{COL_NEW_CLIENTS_SHARE}{row_excel}"].value in (None, ""))
-                    and (not COL_AVAILABLE_CAPACITY or ws[f"{COL_AVAILABLE_CAPACITY}{row_excel}"].value in (None, ""))
-                    and (not COL_REACH or ws[f"{COL_REACH}{row_excel}"].value in (None, ""))
-                    and (not COL_FREQUENCY or ws[f"{COL_FREQUENCY}{row_excel}"].value in (None, ""))
-                )
-                if is_empty_main and is_empty_metrics:
-                    rows_to_hide_periods.append(row_excel)
+        for row_excel in sorted(set(period_rows_for_hide)):
+            is_empty_main = (
+                ws[f"{COL_SYSTEM}{row_excel}"].value in (None, "")
+                and ws[f"{COL_FORMAT}{row_excel}"].value in (None, "")
+                and ws[f"{COL_TARGETING}{row_excel}"].value in (None, "")
+            )
+            is_empty_metrics = (
+                ws[f"{COL_IMPRESSIONS}{row_excel}"].value in (None, "")
+                and ws[f"{COL_CTR}{row_excel}"].value in (None, "")
+                and ws[f"{COL_CPC}{row_excel}"].value in (None, "")
+                and ws[f"{COL_AK}{row_excel}"].value in (None, "")
+                and ws[f"{COL_CR}{row_excel}"].value in (None, "")
+                and (not COL_AOV or ws[f"{COL_AOV}{row_excel}"].value in (None, ""))
+                and (not COL_NEW_CLIENTS_SHARE or ws[f"{COL_NEW_CLIENTS_SHARE}{row_excel}"].value in (None, ""))
+                and (not COL_AVAILABLE_CAPACITY or ws[f"{COL_AVAILABLE_CAPACITY}{row_excel}"].value in (None, ""))
+                and (not COL_REACH or ws[f"{COL_REACH}{row_excel}"].value in (None, ""))
+                and (not COL_FREQUENCY or ws[f"{COL_FREQUENCY}{row_excel}"].value in (None, ""))
+                and (not COL_CLIENT_COUNT or ws[f"{COL_CLIENT_COUNT}{row_excel}"].value in (None, ""))
+                and (not COL_ABSOLUTE_NEW_CLIENTS or ws[f"{COL_ABSOLUTE_NEW_CLIENTS}{row_excel}"].value in (None, ""))
+                and (not COL_RETURNED_CLIENTS or ws[f"{COL_RETURNED_CLIENTS}{row_excel}"].value in (None, ""))
+                and (not COL_ORDER_FREQUENCY or ws[f"{COL_ORDER_FREQUENCY}{row_excel}"].value in (None, ""))
+                and (not COL_SHIPPED_AOV or ws[f"{COL_SHIPPED_AOV}{row_excel}"].value in (None, ""))
+            )
+            if is_empty_main and is_empty_metrics:
+                rows_to_hide_periods.append(row_excel)
         for row_idx in sorted(set(rows_to_hide_periods)):
             ws.row_dimensions[row_idx].hidden = True
 
@@ -2011,6 +2081,96 @@ def resolve_template_path(template_kind: str = "ecom") -> str | None:
     if not existing_templates:
         return None
     return max(existing_templates, key=os.path.getmtime)
+
+
+def build_template_export_payload(
+    df_export: pd.DataFrame,
+    campaigns_export: pd.DataFrame,
+    collapse_geo_to_rf: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df_template = df_export.copy()
+    campaigns_template = campaigns_export.copy()
+
+    if not collapse_geo_to_rf:
+        return df_template, campaigns_template
+
+    if "geo" not in df_template.columns:
+        df_template["geo"] = ""
+    if "geo" not in campaigns_template.columns:
+        campaigns_template["geo"] = ""
+
+    group_cols = ["planning_slot", "month_num", "month_year", "month_name", "campaign_type", "system", "format"]
+    if "segment" in df_template.columns:
+        group_cols.append("segment")
+
+    sum_candidates = [
+        "impressions", "reach", "clicks", "conversions", "leads", "target_leads",
+        "cost", "ak_cost_wo_vat", "total_budget_wo_vat_ak", "cost_with_vat", "cost_with_vat_ak", "vat_amount",
+        "revenue", "available_capacity", "client_count", "absolute_new_clients", "returned_clients", "new_clients",
+        "shipped_orders", "shipped_revenue",
+    ]
+    agg_map = {col: "sum" for col in sum_candidates if col in df_template.columns}
+    df_template = df_template.groupby(group_cols, as_index=False, sort=False).agg(agg_map)
+    df_template["geo"] = "РФ"
+
+    def _safe_ratio(num_col: str, den_col: str, pct: bool = False) -> pd.Series:
+        if num_col not in df_template.columns or den_col not in df_template.columns:
+            return pd.Series(0.0, index=df_template.index, dtype=float)
+        num = pd.to_numeric(df_template[num_col], errors="coerce").fillna(0.0)
+        den = pd.to_numeric(df_template[den_col], errors="coerce").fillna(0.0)
+        out = np.where(den > 0, num / den, 0.0)
+        if pct:
+            out = out * 100.0
+        return pd.Series(out, index=df_template.index, dtype=float)
+
+    df_template["frequency"] = _safe_ratio("impressions", "reach", pct=False)
+    df_template["ctr"] = _safe_ratio("clicks", "impressions", pct=False)
+    df_template["cpc"] = _safe_ratio("cost", "clicks", pct=False)
+    if "conversions" in df_template.columns:
+        df_template["cr"] = _safe_ratio("conversions", "clicks", pct=False)
+    elif "target_leads" in df_template.columns:
+        df_template["cr"] = _safe_ratio("target_leads", "clicks", pct=False)
+    else:
+        df_template["cr"] = 0.0
+    if "shipped_orders" in df_template.columns:
+        df_template["cr2"] = _safe_ratio("shipped_orders", "conversions", pct=False)
+    elif "target_leads" in df_template.columns and "leads" in df_template.columns:
+        df_template["cr2"] = _safe_ratio("target_leads", "leads", pct=False)
+    else:
+        df_template["cr2"] = 0.0
+    df_template["aov"] = _safe_ratio("revenue", "conversions", pct=False)
+    df_template["shipped_aov"] = _safe_ratio("shipped_revenue", "shipped_orders", pct=False)
+    df_template["ak_rate"] = _safe_ratio("ak_cost_wo_vat", "cost", pct=False)
+    df_template["ak_rate_pct"] = df_template["ak_rate"] * 100.0
+    df_template["new_clients_share_pct"] = _safe_ratio("new_clients", "client_count", pct=True)
+    df_template["sov_pct"] = _safe_ratio("reach", "available_capacity", pct=True)
+    # For collapsed RF export this metric is intentionally left empty:
+    # the specialist can set it manually in the template.
+    df_template["order_frequency"] = np.nan
+    df_template["cac"] = _safe_ratio("cost_with_vat_ak", "new_clients", pct=False)
+    df_template["cpm"] = np.where(
+        pd.to_numeric(df_template.get("impressions", 0.0), errors="coerce").fillna(0.0) > 0,
+        pd.to_numeric(df_template.get("cost_with_vat_ak", 0.0), errors="coerce").fillna(0.0)
+        / (pd.to_numeric(df_template.get("impressions", 0.0), errors="coerce").fillna(0.0) / 1000.0),
+        0.0,
+    )
+    df_template["roas"] = _safe_ratio("revenue", "cost_with_vat_ak", pct=False)
+    df_template["drr"] = _safe_ratio("cost_with_vat_ak", "revenue", pct=False)
+    df_template["shipped_roas"] = _safe_ratio("shipped_revenue", "cost_with_vat_ak", pct=False)
+    df_template["shipped_drr_pct"] = _safe_ratio("cost_with_vat_ak", "shipped_revenue", pct=True)
+    df_template["shipped_cps"] = _safe_ratio("cost_with_vat_ak", "shipped_orders", pct=False)
+
+    campaign_key_cols = ["campaign_type", "system", "format"]
+    if "segment" in campaigns_template.columns:
+        campaign_key_cols.append("segment")
+    campaigns_template["geo"] = "РФ"
+    campaigns_template = (
+        campaigns_template
+        .drop_duplicates(subset=campaign_key_cols, keep="first")
+        .reset_index(drop=True)
+    )
+
+    return df_template, campaigns_template
 
 
 # ---------- ЗАГОЛОВОК  ТАБЫ ----------
@@ -3139,13 +3299,13 @@ with tab_setup:
 
         default_campaigns = pd.DataFrame(
             [
-                ["Поиск бренд", "B2C", "Яндекс", "Поиск", "",        500_000, 5.0, 15.0, 5.0, 50.0, 5000.0, 220_000, 0.0, 0.0, 0.0, 0.0, 0.0],
-                ["РСЯ баннеры", "B2C", "Яндекс", "РСЯ баннеры", "", 1_000_000, 1.0, 10.0, 2.0, 40.0, 3000.0, 450_000, 0.0, 0.0, 0.0, 0.0, 0.0],
-                ["Видео YouTube", "B2B", "YouTube", "Видео", "",     300_000, 0.7, 20.0, 1.5, 35.0, 4000.0, 180_000, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ["Поиск бренд", "B2C", "Яндекс", "Поиск", "",        500_000, 5.0, 15.0, 5.0, 50.0, 5000.0, 5000.0, 220_000, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ["РСЯ баннеры", "B2C", "Яндекс", "РСЯ баннеры", "", 1_000_000, 1.0, 10.0, 2.0, 40.0, 3000.0, 3000.0, 450_000, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ["Видео YouTube", "B2B", "YouTube", "Видео", "",     300_000, 0.7, 20.0, 1.5, 35.0, 4000.0, 4000.0, 180_000, 0.0, 0.0, 0.0, 0.0, 0.0],
             ],
             columns=[
                 "campaign_type", "segment", "system", "format", "geo",
-                "impressions_avg", "ctr_avg_percent", "cpc_avg", "cr_avg_percent", "cr2_avg_percent", "aov_avg", "reach_avg",
+                "impressions_avg", "ctr_avg_percent", "cpc_avg", "cr_avg_percent", "cr2_avg_percent", "aov_avg", "shipped_aov_avg", "reach_avg",
                 "available_capacity_avg", "client_count_avg", "absolute_new_clients_avg", "returned_clients_avg", "order_frequency_avg",
             ],
         )
@@ -3166,6 +3326,8 @@ with tab_setup:
             st.session_state["campaigns_df"]["returned_clients_avg"] = 0.0
         if "order_frequency_avg" not in st.session_state["campaigns_df"].columns:
             st.session_state["campaigns_df"]["order_frequency_avg"] = 0.0
+        if "shipped_aov_avg" not in st.session_state["campaigns_df"].columns:
+            st.session_state["campaigns_df"]["shipped_aov_avg"] = 0.0
         if "reach_avg" not in st.session_state["campaigns_df"].columns:
             st.session_state["campaigns_df"]["reach_avg"] = 0.0
         if "cr2_avg_percent" not in st.session_state["campaigns_df"].columns:
@@ -3183,6 +3345,7 @@ with tab_setup:
             "cr_avg_percent",
             "cr2_avg_percent",
             "aov_avg",
+            "shipped_aov_avg",
             "reach_avg",
             "available_capacity_avg",
             "client_count_avg",
@@ -3229,6 +3392,15 @@ with tab_setup:
             campaigns_editor_columns.append("cr2_avg_percent")
         elif metric_mode["needs_aov"]:
             campaigns_editor_columns.append("aov_avg")
+        if is_diy_preset:
+            campaigns_column_config["aov_avg"] = st.column_config.NumberColumn(
+                "Средний чек по оформл. доходу, с НДС (база)", format="%.2f", help=mhelp("aov")
+            )
+            campaigns_column_config["shipped_aov_avg"] = st.column_config.NumberColumn(
+                "Средний чек по отгр. доходу, с НДС (база)", format="%.2f", help=mhelp("shipped_aov")
+            )
+            campaigns_editor_columns.append("aov_avg")
+            campaigns_editor_columns.append("shipped_aov_avg")
         if is_diy_preset:
             campaigns_column_config["segment"] = st.column_config.SelectboxColumn("Сегмент", options=["B2B", "B2C"])
             campaigns_editor_columns.insert(4, "segment")
@@ -3284,6 +3456,7 @@ with tab_setup:
                 "cr_avg_percent": 0.0,
                 "cr2_avg_percent": 0.0,
                 "aov_avg": 0.0,
+                "shipped_aov_avg": 0.0,
                 "reach_avg": 0.0,
                 "available_capacity_avg": 0.0,
                 "client_count_avg": 0.0,
@@ -3330,7 +3503,7 @@ with tab_setup:
             elif metric_mode["is_real_estate_simple"]:
                 required_labels += ["CR в ЦО"]
             elif is_diy_preset:
-                required_labels += ["CR", "AOV", "Охват"]
+                required_labels += ["CR1", "CR2", "Средний чек по оформл. доходу", "Средний чек по отгр. доходу", "Охват"]
             else:
                 required_labels += ["CR", "AOV"]
             st.error(
@@ -4312,6 +4485,7 @@ with tab_setup:
             out["revenue"] = float(out.get("revenue", 0.0)) * (1.0 + VAT_RATE)
         if is_diy_preset:
             cap_avg = float(base_row.get("available_capacity_avg", 0.0) or 0.0)
+            shipped_aov_avg = float(base_row.get("shipped_aov_avg", 0.0) or 0.0)
             out["available_capacity"] = cap_avg
             out["client_count"] = float(base_row.get("client_count_avg", 0.0) or 0.0)
             out["absolute_new_clients"] = float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0)
@@ -4322,7 +4496,8 @@ with tab_setup:
             out["sov_pct"] = (float(out.get("reach", 0.0)) / cap_avg * 100.0) if cap_avg > 0 else 0.0
             out["cac"] = (float(out.get("cost_with_vat_ak", 0.0)) / float(out.get("new_clients", 0.0))) if float(out.get("new_clients", 0.0)) > 0 else 0.0
             out["shipped_orders"] = float(out.get("target_leads", 0.0) or 0.0)
-            out["shipped_revenue"] = float(out.get("shipped_orders", 0.0)) * float(out.get("aov", 0.0) or 0.0)
+            out["shipped_revenue"] = float(out.get("shipped_orders", 0.0)) * shipped_aov_avg
+            out["shipped_aov"] = shipped_aov_avg
         base_rows.append(out)
 
     df_base = pd.DataFrame(base_rows)
@@ -5327,6 +5502,7 @@ with tab_plan:
                     absolute_new_clients_month = float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0)
                     returned_clients_month = float(base_row.get("returned_clients_avg", 0.0) or 0.0)
                     order_frequency_month = float(base_row.get("order_frequency_avg", 0.0) or 0.0)
+                    shipped_aov_month = float(base_row.get("shipped_aov_avg", 0.0) or 0.0)
                 else:
                     k_row = k_row.iloc[0]
                     k_imp = float(k_row["k_imp"])
@@ -5346,6 +5522,7 @@ with tab_plan:
                     absolute_new_clients_month = float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0) * k_absolute_new_clients
                     returned_clients_month = float(base_row.get("returned_clients_avg", 0.0) or 0.0) * k_returned_clients
                     order_frequency_month = float(base_row.get("order_frequency_avg", 0.0) or 0.0) * k_order_frequency
+                    shipped_aov_month = float(base_row.get("shipped_aov_avg", 0.0) or 0.0) * k_aov
 
                 base = PlanInput(
                     impressions=base_row["impressions_avg"],
@@ -5395,7 +5572,8 @@ with tab_plan:
                     out["new_clients_share_pct"] = calc_new_clients_share_pct(out["new_clients"], out["client_count"])
                     out["cac"] = (float(out.get("cost_with_vat_ak", 0.0)) / float(out.get("new_clients", 0.0))) if float(out.get("new_clients", 0.0)) > 0 else 0.0
                     out["shipped_orders"] = float(out.get("target_leads", 0.0) or 0.0)
-                    out["shipped_revenue"] = float(out.get("shipped_orders", 0.0)) * float(out.get("aov", 0.0) or 0.0)
+                    out["shipped_revenue"] = float(out.get("shipped_orders", 0.0)) * shipped_aov_month
+                    out["shipped_aov"] = shipped_aov_month
                 rows.append(out)
 
             df_month = pd.DataFrame(rows)
@@ -7829,7 +8007,14 @@ with tab_export:
                 )
 
                 # ---------- 2) Экспорт в шаблон ----------
-                template_campaigns = campaigns[campaigns["campaign_type"].isin(export_ctypes_selected)].copy()
+                collapse_geo_template_export = st.checkbox(
+                    "Схлопнуть ГЕО в РФ для шаблонного экспорта",
+                    value=False,
+                    key="collapse_geo_template_export",
+                    help="Объединяет строки одинаковых типов РК из разных ГЕО и выгружает их одной строкой с ГЕО = РФ.",
+                )
+
+                template_campaigns_raw = campaigns[campaigns["campaign_type"].isin(export_ctypes_selected)].copy()
                 template_periods = (
                     df_export[["planning_slot", "month_num", "month_year", "month_name"]]
                     .drop_duplicates()
@@ -7839,9 +8024,17 @@ with tab_export:
                 if len(template_periods) > 12:
                     st.warning("Для экспорта в шаблон используется максимум 12 месяцев.")
                     template_periods = template_periods[:12]
-                if len(template_campaigns) > 10:
-                    st.warning("Для экспорта в шаблон используется максимум 10 типов РК (ограничение шаблона).")
-                    template_campaigns = template_campaigns.head(10)
+
+                template_df_export, template_campaigns = build_template_export_payload(
+                    df_export=df_export,
+                    campaigns_export=template_campaigns_raw,
+                    collapse_geo_to_rf=collapse_geo_template_export,
+                )
+
+                if collapse_geo_template_export:
+                    st.caption(
+                        f"Шаблонный экспорт будет собран без разбивки по ГЕО: {len(df_export)} строк -> {len(template_df_export)} строк."
+                    )
 
                 if not template_campaigns.empty and template_periods:
                     try:
@@ -7856,7 +8049,7 @@ with tab_export:
                         resolved_tpl_ecom = resolve_template_path("ecom")
                         if resolved_tpl_ecom:
                             tpl_buf_ecom = build_excel_from_template(
-                                df_all=df_export,
+                                df_all=template_df_export,
                                 campaigns=template_campaigns,
                                 selected_periods=template_periods,
                                 template_kind="ecom",
@@ -7875,7 +8068,7 @@ with tab_export:
                         resolved_tpl_diy = resolve_template_path("diy")
                         if resolved_tpl_diy:
                             tpl_buf_diy = build_excel_from_template(
-                                df_all=df_export,
+                                df_all=template_df_export,
                                 campaigns=template_campaigns,
                                 selected_periods=template_periods,
                                 template_kind="diy",
@@ -7894,7 +8087,7 @@ with tab_export:
                         resolved_tpl_real_estate_simple = resolve_template_path("real_estate_simple")
                         if resolved_tpl_real_estate_simple:
                             tpl_buf_real_estate_simple = build_excel_from_template(
-                                df_all=df_export,
+                                df_all=template_df_export,
                                 campaigns=template_campaigns,
                                 selected_periods=template_periods,
                                 template_kind="real_estate_simple",
@@ -7913,7 +8106,7 @@ with tab_export:
                         resolved_tpl_real_estate_full = resolve_template_path("real_estate_full")
                         if resolved_tpl_real_estate_full:
                             tpl_buf_real_estate_full = build_excel_from_template(
-                                df_all=df_export,
+                                df_all=template_df_export,
                                 campaigns=template_campaigns,
                                 selected_periods=template_periods,
                                 template_kind="real_estate_full",
