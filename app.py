@@ -5209,6 +5209,30 @@ with tab_setup:
             df_base_show["budget_share_segment_pct"] = df_base_show["budget_share_segment_pct"].map(
                 lambda x: "" if pd.isna(x) else f"{x:.2f} %"
             )
+            df_base_show["shipped_orders"] = df_base_show["shipped_orders"].map(
+                lambda x: "" if pd.isna(x) else f"{round(x):,}".replace(",", " ")
+            )
+            df_base_show["shipped_cps"] = df_base_show["shipped_cps"].map(
+                lambda x: "" if pd.isna(x) else f"{round(x):,} ₽".replace(",", " ")
+            )
+            df_base_show["shipped_aov"] = df_base_show["shipped_aov"].map(
+                lambda x: "" if pd.isna(x) else f"{round(x):,} ₽".replace(",", " ")
+            )
+            df_base_show["shipped_revenue"] = df_base_show["shipped_revenue"].map(
+                lambda x: "" if pd.isna(x) else f"{round(x):,} ₽".replace(",", " ")
+            )
+            df_base_show["shipped_roas"] = df_base_show["shipped_roas"].map(
+                lambda x: "" if pd.isna(x) else f"{x:.2f}"
+            )
+            df_base_show["shipped_drr_pct"] = df_base_show["shipped_drr_pct"].map(
+                lambda x: "" if pd.isna(x) else f"{x:.2f} %"
+            )
+            df_base_show["shipped_order_share_segment_pct"] = df_base_show["shipped_order_share_segment_pct"].map(
+                lambda x: "" if pd.isna(x) else f"{x:.2f} %"
+            )
+            df_base_show["shipped_revenue_share_segment_pct"] = df_base_show["shipped_revenue_share_segment_pct"].map(
+                lambda x: "" if pd.isna(x) else f"{x:.2f} %"
+            )
             base_show_cols += ["available_capacity", "client_count", "absolute_new_clients", "returned_clients", "new_clients", "cac", "order_frequency", "shipped_orders", "shipped_cps", "shipped_aov", "shipped_revenue", "shipped_roas", "shipped_drr_pct", "shipped_order_share_segment_pct", "shipped_revenue_share_segment_pct", "sov_pct", "new_clients_share_pct", "order_share_segment_pct", "revenue_share_segment_pct", "budget_share_segment_pct"]
         # Порядок метрик задан под бизнес-логику проверки.
         df_base_show = safe_select_columns(df_base_show, base_show_cols, fill_value="")
@@ -5299,6 +5323,22 @@ with tab_setup:
                 df_base_show.at[li, DISPLAY_COL_RENAME["cac"]] = f"{round(total_row_raw.get('cac', 0.0)):,} ₽".replace(",", " ")
             if DISPLAY_COL_RENAME["order_frequency"] in df_base_show.columns:
                 df_base_show.at[li, DISPLAY_COL_RENAME["order_frequency"]] = f"{float(total_row_raw.get('order_frequency', 0.0)):.2f}"
+            if DISPLAY_COL_RENAME["shipped_orders"] in df_base_show.columns:
+                df_base_show.at[li, DISPLAY_COL_RENAME["shipped_orders"]] = f"{round(total_row_raw.get('shipped_orders', 0.0)):,}".replace(",", " ")
+            if DISPLAY_COL_RENAME["shipped_cps"] in df_base_show.columns:
+                df_base_show.at[li, DISPLAY_COL_RENAME["shipped_cps"]] = f"{round(total_row_raw.get('shipped_cps', 0.0)):,} ₽".replace(",", " ")
+            if DISPLAY_COL_RENAME["shipped_aov"] in df_base_show.columns:
+                df_base_show.at[li, DISPLAY_COL_RENAME["shipped_aov"]] = f"{round(total_row_raw.get('shipped_aov', 0.0)):,} ₽".replace(",", " ")
+            if DISPLAY_COL_RENAME["shipped_revenue"] in df_base_show.columns:
+                df_base_show.at[li, DISPLAY_COL_RENAME["shipped_revenue"]] = f"{round(total_row_raw.get('shipped_revenue', 0.0)):,} ₽".replace(",", " ")
+            if DISPLAY_COL_RENAME["shipped_roas"] in df_base_show.columns:
+                df_base_show.at[li, DISPLAY_COL_RENAME["shipped_roas"]] = f"{float(total_row_raw.get('shipped_roas', 0.0)):.2f}"
+            if DISPLAY_COL_RENAME["shipped_drr_pct"] in df_base_show.columns:
+                df_base_show.at[li, DISPLAY_COL_RENAME["shipped_drr_pct"]] = f"{float(total_row_raw.get('shipped_drr_pct', 0.0)):.2f} %"
+            if DISPLAY_COL_RENAME["shipped_order_share_segment_pct"] in df_base_show.columns:
+                df_base_show.at[li, DISPLAY_COL_RENAME["shipped_order_share_segment_pct"]] = "100.00 %"
+            if DISPLAY_COL_RENAME["shipped_revenue_share_segment_pct"] in df_base_show.columns:
+                df_base_show.at[li, DISPLAY_COL_RENAME["shipped_revenue_share_segment_pct"]] = "100.00 %"
             if DISPLAY_COL_RENAME["sov_pct"] in df_base_show.columns:
                 df_base_show.at[li, DISPLAY_COL_RENAME["sov_pct"]] = f"{float(total_row_raw.get('sov_pct', 0.0)):.2f} %"
             if DISPLAY_COL_RENAME["new_clients_share_pct"] in df_base_show.columns:
@@ -5544,8 +5584,10 @@ with tab_plan:
                 camp_type = str(base_row["campaign_type"])
                 campaign_key = get_campaign_identity_key_from_row(base_row)
 
-                k_demand = get_k_demand(campaign_key, planning_slot)
-                k_media_tail = get_k_media_tail(campaign_key, planning_slot)
+                # Coefficient sets are defined for calendar months (Jan..Dec),
+                # so they must be applied by month_num, not by planning slot.
+                k_demand = get_k_demand(campaign_key, month)
+                k_media_tail = get_k_media_tail(campaign_key, month)
                 el = elasticity_map.get(
                     campaign_key,
                     {"cpc_div": 1.0, "ctr_div": 2.0, "cr_div": 10.0},
@@ -5560,13 +5602,13 @@ with tab_plan:
                 k_ctr = max(0.0, k_ctr)
                 k_cr = max(0.0, k_cr)
                 k_cr2 = max(0.0, k_cr2)
-                k_aov = get_k_aov(campaign_key, planning_slot)
-                k_capacity = get_k_capacity(campaign_key, planning_slot)
-                k_client_count = get_k_client_count(campaign_key, planning_slot)
-                k_absolute_new_clients = get_k_absolute_new_clients(campaign_key, planning_slot)
-                k_returned_clients = get_k_returned_clients(campaign_key, planning_slot)
-                k_order_frequency = get_k_order_frequency(campaign_key, planning_slot)
-                k_reach = get_k_reach(campaign_key, planning_slot)
+                k_aov = get_k_aov(campaign_key, month)
+                k_capacity = get_k_capacity(campaign_key, month)
+                k_client_count = get_k_client_count(campaign_key, month)
+                k_absolute_new_clients = get_k_absolute_new_clients(campaign_key, month)
+                k_returned_clients = get_k_returned_clients(campaign_key, month)
+                k_order_frequency = get_k_order_frequency(campaign_key, month)
+                k_reach = get_k_reach(campaign_key, month)
 
                 coeff_row = {
                     "campaign_key": campaign_key,
@@ -8190,6 +8232,8 @@ with tab_export:
                             "budget_share_segment_pct": "Доля рекламного бюджета, %",
                         }
                     )
+                    if "ROAS" in df_detail.columns:
+                        df_detail["ROAS"] = pd.to_numeric(df_detail["ROAS"], errors="coerce").round(2)
                     df_detail.to_excel(writer, sheet_name="Детально", index=False)
 
                     agg_month = df_export.groupby(["planning_slot", "month_num", "month_year", "month_name"], as_index=False).agg(
@@ -8248,6 +8292,8 @@ with tab_export:
                             "drr_pct": "ДРР, %",
                         }
                     )
+                    if "ROAS" in agg_month.columns:
+                        agg_month["ROAS"] = pd.to_numeric(agg_month["ROAS"], errors="coerce").round(2)
                     agg_month.to_excel(writer, sheet_name="Сводка_по_месяцам", index=False)
 
                 detail_buf.seek(0)
