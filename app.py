@@ -1620,6 +1620,7 @@ def build_excel_from_template(df_all: pd.DataFrame,
                               selected_periods: list[dict],
                               template_kind: str = "ecom",
                               compact_empty_rows: bool = True) -> BytesIO:
+    selected_periods = normalize_selected_periods_for_template(list(selected_periods or []))
 
     template_paths = TEMPLATE_PATHS_BY_KIND.get(template_kind, TEMPLATE_PATHS_ECOM)
     existing_templates = [p for p in template_paths if os.path.exists(p)]
@@ -1896,7 +1897,9 @@ def build_excel_from_template(df_all: pd.DataFrame,
             ws[f"{COL_OTHER}{row_excel}"] = None
         ws[f"{COL_IMPRESSIONS}{row_excel}"] = impressions
         ws[f"{COL_CTR}{row_excel}"] = ctr
-        ws[f"{COL_CPC}{row_excel}"] = (cpc / 1.22) if is_diy_template else cpc
+        # In the app CPC is already stored without VAT, including DIY.
+        # The template column "Цена за единицу (без НДС)" expects the same basis.
+        ws[f"{COL_CPC}{row_excel}"] = cpc
         ws[f"{COL_AK}{row_excel}"] = ak_rate
         ws[f"{COL_CR}{row_excel}"] = cr
         if COL_CR2:
@@ -1956,8 +1959,16 @@ def build_excel_from_template(df_all: pd.DataFrame,
         if row_b2c_total is None or row_b2b_total is None or row_b2b_total <= row_b2c_total:
             return None
 
-        b2c_rows = list(range(block_start_row, row_b2c_total))
         b2b_rows = list(range(row_b2c_total + 1, row_b2b_total))
+        if not b2b_rows:
+            return None
+        # In the full DIY template some blocks contain a service/header spill row
+        # right before the first B2C data row. Derive the B2C area from the
+        # distance to the B2B area so both segments always get the intended number
+        # of writable campaign rows.
+        b2c_rows_count = len(b2b_rows)
+        b2c_start_row = row_b2c_total - b2c_rows_count
+        b2c_rows = list(range(b2c_start_row, row_b2c_total))
         return b2c_rows, b2b_rows
 
     def _collect_diy_total_rows() -> tuple[list[int], list[int]] | None:
@@ -1979,9 +1990,32 @@ def build_excel_from_template(df_all: pd.DataFrame,
         if row_b2c_total is None or row_b2b_total is None or row_b2b_total <= row_b2c_total:
             return None
 
-        b2c_rows = list(range(START_ROW_TOTAL, row_b2c_total))
         b2b_rows = list(range(row_b2c_total + 1, row_b2b_total))
+        if not b2b_rows:
+            return None
+        b2c_rows_count = len(b2b_rows)
+        b2c_start_row = row_b2c_total - b2c_rows_count
+        b2c_rows = list(range(b2c_start_row, row_b2c_total))
         return b2c_rows, b2b_rows
+
+    def _match_row_data(df_scope: pd.DataFrame, camp_row: pd.Series) -> pd.Series | None:
+        if df_scope is None or df_scope.empty or camp_row is None:
+            return None
+        mask = df_scope["campaign_type"].astype(str) == str(camp_row.get("campaign_type", ""))
+        if "segment" in df_scope.columns and "segment" in camp_row.index:
+            mask &= (
+                df_scope["segment"].fillna("").astype(str).str.upper().str.strip()
+                == str(camp_row.get("segment", "")).upper().strip()
+            )
+        if "geo" in df_scope.columns and "geo" in camp_row.index:
+            mask &= (
+                df_scope["geo"].fillna("").astype(str).str.strip()
+                == str(camp_row.get("geo", "")).strip()
+            )
+        matched = df_scope[mask]
+        if matched.empty:
+            matched = df_scope[df_scope["campaign_type"].astype(str) == str(camp_row.get("campaign_type", ""))]
+        return None if matched.empty else matched.iloc[0]
 
     for block_index, period in enumerate(selected_periods):
         month_num = int(period.get("month_num", 1) or 1)
@@ -2008,14 +2042,14 @@ def build_excel_from_template(df_all: pd.DataFrame,
             camps_b2b = camps[camps["_seg"] == "B2B"]
 
             for row_excel, (_, camp) in zip(b2c_rows, camps_b2c.iterrows()):
-                row_data = df_month[df_month["campaign_type"] == camp["campaign_type"]]
-                _write_period_row(row_excel, camp, (None if row_data.empty else row_data.iloc[0]), period_str)
+                row_data = _match_row_data(df_month, camp)
+                _write_period_row(row_excel, camp, row_data, period_str)
             for row_excel in b2c_rows[len(camps_b2c):]:
                 _write_period_row(row_excel, None, None, period_str)
 
             for row_excel, (_, camp) in zip(b2b_rows, camps_b2b.iterrows()):
-                row_data = df_month[df_month["campaign_type"] == camp["campaign_type"]]
-                _write_period_row(row_excel, camp, (None if row_data.empty else row_data.iloc[0]), period_str)
+                row_data = _match_row_data(df_month, camp)
+                _write_period_row(row_excel, camp, row_data, period_str)
             for row_excel in b2b_rows[len(camps_b2b):]:
                 _write_period_row(row_excel, None, None, period_str)
         else:
@@ -2024,8 +2058,8 @@ def build_excel_from_template(df_all: pd.DataFrame,
                 if i >= ROWS_PER_MONTH:
                     break
                 row_excel = block_start_row + i
-                row_data = df_month[df_month["campaign_type"] == camp["campaign_type"]]
-                _write_period_row(row_excel, camp, (None if row_data.empty else row_data.iloc[0]), period_str)
+                row_data = _match_row_data(df_month, camp)
+                _write_period_row(row_excel, camp, row_data, period_str)
             for i in range(min(len(campaigns), ROWS_PER_MONTH), ROWS_PER_MONTH):
                 _write_period_row(block_start_row + i, None, None, period_str)
 
@@ -2199,6 +2233,32 @@ def build_template_export_payload(
     )
 
     return df_template, campaigns_template
+
+
+def normalize_selected_periods_for_template(selected_periods: list[dict]) -> list[dict]:
+    if not selected_periods:
+        return []
+
+    def _period_sort_key(period: dict) -> tuple[int, int, int]:
+        planning_slot = int(period.get("planning_slot", 10**9) or 10**9)
+        month_year = int(period.get("month_year", 10**9) or 10**9)
+        month_num = int(period.get("month_num", 10**9) or 10**9)
+        return planning_slot, month_year, month_num
+
+    normalized = []
+    seen = set()
+    for period in sorted(selected_periods, key=_period_sort_key):
+        key = (
+            int(period.get("planning_slot", 0) or 0),
+            int(period.get("month_year", 0) or 0),
+            int(period.get("month_num", 0) or 0),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(period)
+
+    return normalized
 
 
 # ---------- ЗАГОЛОВОК  ТАБЫ ----------
@@ -7017,6 +7077,29 @@ with tab_charts:
                 st.info("Выберите хотя бы один тип РК.")
             else:
                 selected_segments_charts = None
+                selected_geos_charts = None
+                has_geo_filter = (
+                    "geo" in df_all.columns
+                    and df_all["geo"].fillna("").astype(str).str.strip().ne("").any()
+                )
+                if has_geo_filter:
+                    all_geos = sorted(
+                        df_all["geo"]
+                        .fillna("")
+                        .astype(str)
+                        .str.strip()
+                        .loc[lambda s: s != ""]
+                        .unique()
+                        .tolist()
+                    )
+                    selected_geos_charts = st.multiselect(
+                        "ГЕО для включения:",
+                        options=all_geos,
+                        default=all_geos,
+                        key="charts_geo_multiselect",
+                    )
+                    if not selected_geos_charts:
+                        st.info("Выберите хотя бы одно ГЕО.")
                 if is_diy_preset and "segment" in df_all.columns:
                     all_segments = sorted(df_all["segment"].dropna().astype(str).unique().tolist())
                     selected_segments_charts = st.multiselect(
@@ -7027,18 +7110,26 @@ with tab_charts:
                     )
                     if not selected_segments_charts:
                         st.info("Выберите хотя бы один сегмент.")
-                if is_diy_preset and selected_segments_charts == []:
+                if (has_geo_filter and selected_geos_charts == []) or (is_diy_preset and selected_segments_charts == []):
                     df_sel = pd.DataFrame()
                 else:
                     mask = df_all["planning_slot"].isin(selected_month_slots_charts) & df_all[
                         "campaign_type"
                     ].isin(selected_campaign_types)
+                    if selected_geos_charts is not None:
+                        mask &= (
+                            df_all["geo"]
+                            .fillna("")
+                            .astype(str)
+                            .str.strip()
+                            .isin(selected_geos_charts)
+                        )
                     if selected_segments_charts is not None:
                         mask &= df_all["segment"].isin(selected_segments_charts)
                     df_sel = df_all[mask]
 
                 if df_sel.empty:
-                    st.info("Для выбранных месяцев и типов РК нет данных.")
+                    st.info("Для выбранных фильтров нет данных.")
                 else:
                     # ---------- Сводная таблица по месяцам ----------
                     agg_m = df_sel.groupby(["planning_slot", "month_num", "month_year", "month_name"], as_index=False).agg(
@@ -7910,9 +8001,11 @@ with tab_export:
         elif not export_ctypes_selected:
             st.info("Выберите хотя бы один тип РК.")
         else:
-            export_month_slots = [int(lbl.split(".")[0]) for lbl in export_month_labels]
+            export_month_slots = sorted({int(lbl.split(".")[0]) for lbl in export_month_labels})
             export_mask = df_all["planning_slot"].isin(export_month_slots) & df_all["campaign_type"].isin(export_ctypes_selected)
             df_export = df_all.loc[export_mask].copy()
+            if "planning_slot" in df_export.columns:
+                df_export = df_export.sort_values(["planning_slot", "month_year", "month_num", "campaign_type"], kind="stable")
 
             if df_export.empty:
                 st.info("Нет данных для выбранных фильтров экспорта.")
@@ -8182,6 +8275,7 @@ with tab_export:
                     .sort_values("planning_slot")
                     .to_dict("records")
                 )
+                template_periods = normalize_selected_periods_for_template(template_periods)
                 if len(template_periods) > 12:
                     st.warning("Для экспорта в шаблон используется максимум 12 месяцев.")
                     template_periods = template_periods[:12]
