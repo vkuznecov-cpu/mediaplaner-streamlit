@@ -33,12 +33,80 @@ except Exception:
 
 st.set_page_config(page_title="Медиапланер 12 месяцев (кампании)", layout="wide")
 
-THEME_BORDER = "#1D2A44"
-THEME_PLOT_TEXT = "#EAF0FF"
-THEME_LEGEND_TEXT = "#D4DDF2"
-THEME_CARD_BG = "#111A2E"
 VAT_RATE = 0.22
 USE_EXCEL_ROUNDDOWN = True
+
+UI_THEMES = {
+    "dark": {
+        "label": "Тёмная",
+        "border": "#1D2A44",
+        "plot_text": "#EAF0FF",
+        "legend_text": "#D4DDF2",
+        "card_bg": "#111A2E",
+        "app_bg": "#0B1220",
+        "sidebar_bg": "#111A2E",
+        "text": "#EAF0FF",
+        "muted_text": "#D4DDF2",
+        "panel_bg": "rgba(17, 26, 46, 0.55)",
+        "button_bg": "#111A2E",
+        "button_hover_bg": "#14203A",
+        "button_border": "#27406F",
+        "tag_bg": "#1A2A47",
+        "tag_border": "#2C4D82",
+        "tag_text": "#9EC5FF",
+        "tab_text": "#9FB0D1",
+        "tab_active_text": "#EAF0FF",
+        "accent": "#0066E0",
+        "accent_hover": "#0A74F2",
+        "accent_border": "#3D8EF0",
+        "accent_border_hover": "#74AEF6",
+        "accent_shadow": "rgba(0, 102, 224, 0.35)",
+        "accent_ring": "rgba(61, 142, 240, 0.25)",
+        "danger_border": "#FF8A66",
+        "danger_bg": "rgba(255, 99, 51, 0.14)",
+        "danger_text": "#FFD9CC",
+    },
+    "warm_sand": {
+        "label": "Paper Blue",
+        "border": "#C9D6E8",
+        "plot_text": "#142033",
+        "legend_text": "#5D6B82",
+        "card_bg": "#FFFFFF",
+        "app_bg": "#F4F7FB",
+        "sidebar_bg": "#EAF0F7",
+        "text": "#142033",
+        "muted_text": "#5D6B82",
+        "panel_bg": "rgba(234, 240, 247, 0.96)",
+        "button_bg": "#FFFFFF",
+        "button_hover_bg": "#EEF4FB",
+        "button_border": "#B8CAE2",
+        "tag_bg": "#EAF0F7",
+        "tag_border": "#C9D6E8",
+        "tag_text": "#0A74F2",
+        "tab_text": "#667792",
+        "tab_active_text": "#142033",
+        "accent": "#0A74F2",
+        "accent_hover": "#1A82FF",
+        "accent_border": "#3C93F3",
+        "accent_border_hover": "#74AEF6",
+        "accent_shadow": "rgba(10, 116, 242, 0.20)",
+        "accent_ring": "rgba(60, 147, 243, 0.18)",
+        "danger_border": "#D98A73",
+        "danger_bg": "rgba(217, 138, 115, 0.10)",
+        "danger_text": "#8A4B39",
+    },
+}
+
+if "ui_theme" not in st.session_state:
+    st.session_state["ui_theme"] = "dark"
+if st.session_state["ui_theme"] not in UI_THEMES:
+    st.session_state["ui_theme"] = "dark"
+
+CURRENT_UI_THEME = UI_THEMES[st.session_state["ui_theme"]]
+THEME_BORDER = CURRENT_UI_THEME["border"]
+THEME_PLOT_TEXT = CURRENT_UI_THEME["plot_text"]
+THEME_LEGEND_TEXT = CURRENT_UI_THEME["legend_text"]
+THEME_CARD_BG = CURRENT_UI_THEME["card_bg"]
 
 METRIC_PRESETS = {
     "ecom": {
@@ -75,206 +143,415 @@ MONTH_NAMES_FULL = {
     12: "Декабрь",
 }
 
-st.markdown(
-    """
-    <style>
-    .main {
-        background-color: #0B1220;
-        color: #EAF0FF;
-    }
-    .stApp {
-        background-color: #0B1220;
-        color: #EAF0FF;
-    }
-    [data-testid="block-container"] {
-        padding-top: 1.05rem;
-        padding-bottom: 0.9rem;
-    }
-    section[data-testid="stSidebar"] {
-        background-color: #111A2E;
-        border-right: 1px solid #1D2A44;
-    }
-    h1, h2, h3, h4 {
-        font-weight: 700;
-        letter-spacing: 0.02em;
-        color: #EAF0FF;
-    }
-    p, li, label {
-        color: #D4DDF2;
-    }
-    .stDataFrame {
-        border-radius: 12px;
-        border: 1px solid #1D2A44;
-    }
-    .stDownloadButton button {
-        background: #0066E0;
-        color: #FFFFFF;
-        font-weight: 700;
-        border-radius: 999px;
-        border: 1px solid #2B7EE8;
-    }
-    .stDownloadButton button:hover {
-        background: #0A74F2;
-        border-color: #0A74F2;
-    }
-    .stButton > button, .stFormSubmitButton > button {
-        border-radius: 10px;
-        border: 1px solid #27406F;
-        background: #111A2E;
-        color: #EAF0FF;
-        font-weight: 600;
-    }
-    .stButton > button:hover, .stFormSubmitButton > button:hover {
-        border-color: #0066E0;
-        background: #14203A;
-    }
-    button[kind="primary"],
-    button[kind="primaryFormSubmit"],
-    .stButton > button[kind="primary"],
-    .stFormSubmitButton > button[kind="primary"],
-    .stFormSubmitButton > button[kind="primaryFormSubmit"],
-    button[data-testid="baseButton-primary"],
-    button[data-testid="stBaseButton-primary"] {
-        background: linear-gradient(180deg, #0A74F2 0%, #0066E0 100%) !important;
-        border: 1px solid #3D8EF0 !important;
-        color: #FFFFFF !important;
-        box-shadow: 0 0 0 1px rgba(61, 142, 240, 0.25), 0 6px 16px rgba(0, 102, 224, 0.35);
-    }
-    button[kind="primary"]:hover,
-    button[kind="primaryFormSubmit"]:hover,
-    .stButton > button[kind="primary"]:hover,
-    .stFormSubmitButton > button[kind="primary"]:hover,
-    .stFormSubmitButton > button[kind="primaryFormSubmit"]:hover,
-    button[data-testid="baseButton-primary"]:hover,
-    button[data-testid="stBaseButton-primary"]:hover {
-        background: linear-gradient(180deg, #1C82F6 0%, #0A74F2 100%) !important;
-        border-color: #74AEF6 !important;
-        color: #FFFFFF !important;
-    }
-    [data-baseweb="tag"] {
-        background-color: #1A2A47 !important;
-        border: 1px solid #2C4D82 !important;
-        color: #9EC5FF !important;
-    }
-    button[data-baseweb="tab"] {
-        color: #9FB0D1 !important;
-    }
-    button[data-baseweb="tab"][aria-selected="true"] {
-        color: #0066E0 !important;
-    }
-    [data-baseweb="tab-highlight"] {
-        background-color: #0066E0 !important;
-    }
-    .bottom-tab-nav {
-        display: flex;
-        gap: 1rem;
-        align-items: end;
-        border-bottom: 1px solid #1D2A44;
-        padding-bottom: 6px;
-        margin-top: 8px;
-    }
-    .bottom-tab-btn {
-        background: transparent;
-        border: 0;
-        border-bottom: 2px solid transparent;
-        color: #9FB0D1;
-        font-weight: 650;
-        font-size: 1rem;
-        padding: 0 0 8px 0;
-        cursor: pointer;
-    }
-    .bottom-tab-btn.is-active {
-        color: #EAF0FF;
-        border-bottom-color: #0066E0;
-    }
-    .ui-section-title {
-        margin: 0.22rem 0 0.42rem 0;
-        font-size: 1.35rem;
-        font-weight: 700;
-        letter-spacing: 0.01em;
-        line-height: 1.2;
-    }
-    .tab-intro {
-        margin: 0.2rem 0 0.7rem 0;
-        padding: 10px 12px;
-        border: 1px solid #1D2A44;
-        border-radius: 10px;
-        background: rgba(17, 26, 46, 0.55);
-        animation: introIn 220ms ease both;
-    }
-    .tab-intro p {
-        margin: 0.12rem 0;
-        color: #D4DDF2;
-        line-height: 1.45;
-    }
-    [data-testid="stExpander"] {
-        margin-bottom: 0.3rem;
-    }
-    [data-testid="stExpander"] summary p {
-        font-weight: 650;
-        letter-spacing: 0.01em;
-    }
-    [data-testid="stExpander"] div[data-testid="stForm"] {
-        border: 0 !important;
-        padding: 0 !important;
-        background: transparent !important;
-        box-shadow: none !important;
-    }
-    /* MOTION START */
-    .stButton > button,
-    .stFormSubmitButton > button,
-    .stDownloadButton > button {
-        transition: transform 140ms ease, box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease;
-    }
-    .stButton > button:hover,
-    .stFormSubmitButton > button:hover,
-    .stDownloadButton > button:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.22);
-    }
-    .stButton > button:active,
-    .stFormSubmitButton > button:active,
-    .stDownloadButton > button:active {
-        transform: translateY(0);
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
-    }
-    [data-testid="stExpander"] {
-        transition: border-color 180ms ease, box-shadow 180ms ease, transform 160ms ease;
-    }
-    [data-testid="stExpander"]:hover {
-        border-color: #2C4D82;
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
-        transform: translateY(-1px);
-    }
-    [data-testid="stDataFrame"] {
-        transition: border-color 180ms ease, box-shadow 180ms ease;
-    }
-    [data-testid="stDataFrame"]:hover {
-        border-color: #2C4D82;
-        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
-    }
-    [data-baseweb="tab"] {
-        transition: color 160ms ease;
-    }
-    [data-baseweb="tab-highlight"] {
-        transition: transform 180ms ease, width 180ms ease, left 180ms ease;
-    }
-    .ui-section-title {
-        animation: fadeInUp 260ms ease both;
-    }
-    @keyframes fadeInUp {
-        from { opacity: 0; transform: translateY(4px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes introIn {
-        from { opacity: 0; transform: translateY(6px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    /* MOTION END */
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+def render_theme_styles(theme: dict) -> None:
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --app-bg: {theme["app_bg"]};
+            --sidebar-bg: {theme["sidebar_bg"]};
+            --card-bg: {theme["card_bg"]};
+            --panel-bg: {theme["panel_bg"]};
+            --border-color: {theme["border"]};
+            --text-color: {theme["text"]};
+            --muted-text: {theme["muted_text"]};
+            --button-bg: {theme["button_bg"]};
+            --button-hover-bg: {theme["button_hover_bg"]};
+            --button-border: {theme["button_border"]};
+            --accent: {theme["accent"]};
+            --accent-hover: {theme["accent_hover"]};
+            --accent-border: {theme["accent_border"]};
+            --accent-border-hover: {theme["accent_border_hover"]};
+            --accent-shadow: {theme["accent_shadow"]};
+            --accent-ring: {theme["accent_ring"]};
+            --tag-bg: {theme["tag_bg"]};
+            --tag-border: {theme["tag_border"]};
+            --tag-text: {theme["tag_text"]};
+            --tab-text: {theme["tab_text"]};
+            --tab-active-text: {theme["tab_active_text"]};
+            --danger-border: {theme["danger_border"]};
+            --danger-bg: {theme["danger_bg"]};
+            --danger-text: {theme["danger_text"]};
+        }}
+        .main, .stApp {{
+            background-color: var(--app-bg);
+            color: var(--text-color);
+        }}
+        [data-testid="block-container"] {{
+            padding-top: 1.05rem;
+            padding-bottom: 0.9rem;
+        }}
+        section[data-testid="stSidebar"] {{
+            background-color: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+        }}
+        h1, h2, h3, h4 {{
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: var(--text-color);
+        }}
+        p, li, label {{
+            color: var(--muted-text);
+        }}
+        .stDataFrame {{
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }}
+        .stDownloadButton button {{
+            background: var(--accent);
+            color: #FFFFFF;
+            font-weight: 700;
+            border-radius: 999px;
+            border: 1px solid var(--accent-border);
+        }}
+        .stDownloadButton button:hover {{
+            background: var(--accent-hover);
+            border-color: var(--accent-hover);
+        }}
+        .stButton > button, .stFormSubmitButton > button {{
+            border-radius: 10px;
+            border: 1px solid var(--button-border);
+            background: var(--button-bg);
+            color: var(--text-color);
+            font-weight: 600;
+        }}
+        .stButton > button:hover, .stFormSubmitButton > button:hover {{
+            border-color: var(--accent);
+            background: var(--button-hover-bg);
+        }}
+        button[kind="primary"],
+        button[kind="primaryFormSubmit"],
+        .stButton > button[kind="primary"],
+        .stFormSubmitButton > button[kind="primary"],
+        .stFormSubmitButton > button[kind="primaryFormSubmit"],
+        button[data-testid="baseButton-primary"],
+        button[data-testid="stBaseButton-primary"] {{
+            background: linear-gradient(180deg, var(--accent-hover) 0%, var(--accent) 100%) !important;
+            border: 1px solid var(--accent-border) !important;
+            color: #FFFFFF !important;
+            box-shadow: 0 0 0 1px var(--accent-ring), 0 6px 16px var(--accent-shadow);
+        }}
+        button[kind="primary"]:hover,
+        button[kind="primaryFormSubmit"]:hover,
+        .stButton > button[kind="primary"]:hover,
+        .stFormSubmitButton > button[kind="primary"]:hover,
+        .stFormSubmitButton > button[kind="primaryFormSubmit"]:hover,
+        button[data-testid="baseButton-primary"]:hover,
+        button[data-testid="stBaseButton-primary"]:hover {{
+            background: linear-gradient(180deg, var(--accent-border-hover) 0%, var(--accent-hover) 100%) !important;
+            border-color: var(--accent-border-hover) !important;
+            color: #FFFFFF !important;
+        }}
+        [data-baseweb="tag"] {{
+            background-color: var(--tag-bg) !important;
+            border: 1px solid var(--tag-border) !important;
+            color: var(--tag-text) !important;
+        }}
+        button[data-baseweb="tab"] {{
+            color: var(--tab-text) !important;
+        }}
+        button[data-baseweb="tab"][aria-selected="true"] {{
+            color: var(--accent) !important;
+        }}
+        [data-baseweb="tab-highlight"] {{
+            background-color: var(--accent) !important;
+        }}
+        .bottom-tab-nav {{
+            display: flex;
+            gap: 1rem;
+            align-items: end;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 6px;
+            margin-top: 8px;
+        }}
+        .bottom-tab-btn {{
+            background: transparent;
+            border: 0;
+            border-bottom: 2px solid transparent;
+            color: var(--tab-text);
+            font-weight: 650;
+            font-size: 1rem;
+            padding: 0 0 8px 0;
+            cursor: pointer;
+        }}
+        .bottom-tab-btn.is-active {{
+            color: var(--tab-active-text);
+            border-bottom-color: var(--accent);
+        }}
+        .ui-section-title {{
+            margin: 0.22rem 0 0.42rem 0;
+            font-size: 1.35rem;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            line-height: 1.2;
+            animation: fadeInUp 260ms ease both;
+        }}
+        .tab-intro {{
+            margin: 0.2rem 0 0.7rem 0;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            background: var(--panel-bg);
+            animation: introIn 220ms ease both;
+        }}
+        .tab-intro p {{
+            margin: 0.12rem 0;
+            color: var(--muted-text);
+            line-height: 1.45;
+        }}
+        [data-testid="stExpander"] {{
+            margin-bottom: 0.3rem;
+            transition: border-color 180ms ease, box-shadow 180ms ease, transform 160ms ease;
+        }}
+        [data-testid="stExpander"] summary p {{
+            font-weight: 650;
+            letter-spacing: 0.01em;
+        }}
+        [data-testid="stExpander"] div[data-testid="stForm"] {{
+            border: 0 !important;
+            padding: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+        }}
+        .stButton > button,
+        .stFormSubmitButton > button,
+        .stDownloadButton > button {{
+            transition: transform 140ms ease, box-shadow 180ms ease, background-color 180ms ease, border-color 180ms ease;
+        }}
+        .stButton > button:hover,
+        .stFormSubmitButton > button:hover,
+        .stDownloadButton > button:hover {{
+            transform: translateY(-1px);
+            box-shadow: 0 6px 14px rgba(0, 0, 0, 0.22);
+        }}
+        .stButton > button:active,
+        .stFormSubmitButton > button:active,
+        .stDownloadButton > button:active {{
+            transform: translateY(0);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+        }}
+        [data-testid="stExpander"]:hover,
+        [data-testid="stDataFrame"]:hover {{
+            border-color: var(--tag-border);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+            transform: translateY(-1px);
+        }}
+        [data-testid="stDataFrame"] {{
+            transition: border-color 180ms ease, box-shadow 180ms ease;
+        }}
+        [data-baseweb="tab"] {{
+            transition: color 160ms ease;
+        }}
+        [data-baseweb="tab-highlight"] {{
+            transition: transform 180ms ease, width 180ms ease, left 180ms ease;
+        }}
+        .theme-chip {{
+            margin: 0.1rem 0 0.55rem 0;
+            padding: 8px 10px;
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg);
+            color: var(--muted-text);
+            font-size: 0.92rem;
+        }}
+        .accent-inline {{
+            color: var(--accent) !important;
+        }}
+        .text-inline {{
+            color: var(--text-color) !important;
+        }}
+        @keyframes fadeInUp {{
+            from {{ opacity: 0; transform: translateY(4px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        @keyframes introIn {{
+            from {{ opacity: 0; transform: translateY(6px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.session_state.get("ui_theme") != "dark":
+        st.markdown(
+            f"""
+            <style>
+            [data-baseweb="base-input"],
+            [data-baseweb="input"] {{
+                background: #FFFFFF !important;
+                border-color: {theme["border"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            [data-baseweb="base-input"] input,
+            [data-baseweb="input"] input,
+            input,
+            textarea {{
+                color: {theme["text"]} !important;
+                -webkit-text-fill-color: {theme["text"]} !important;
+            }}
+            div[data-baseweb="select"] > div,
+            div[data-baseweb="popover"] ul,
+            div[data-baseweb="popover"] li {{
+                background: #FFFFFF !important;
+                color: {theme["text"]} !important;
+                border-color: {theme["border"]} !important;
+            }}
+            div[data-baseweb="select"] * {{
+                color: {theme["text"]} !important;
+            }}
+            div[data-baseweb="select"] svg,
+            [data-testid="stNumberInput"] svg,
+            [data-testid="stSelectbox"] svg {{
+                fill: {theme["text"]} !important;
+                color: {theme["text"]} !important;
+            }}
+            [data-testid="stNumberInput"] button,
+            [data-testid="stSelectbox"] button {{
+                background: #FFFFFF !important;
+                color: {theme["text"]} !important;
+                border-color: {theme["border"]} !important;
+            }}
+            [data-baseweb="tag"] {{
+                background: #EEF4FB !important;
+                border-color: {theme["border"]} !important;
+                color: {theme["accent"]} !important;
+            }}
+            [data-testid="stFileUploaderDropzone"] {{
+                background: #FFFFFF !important;
+                border: 1px solid {theme["border"]} !important;
+            }}
+            [data-testid="stFileUploaderDropzone"] section,
+            [data-testid="stFileUploaderDropzone"] button {{
+                background: #FFFFFF !important;
+                color: {theme["text"]} !important;
+                border-color: {theme["border"]} !important;
+            }}
+            [data-testid="stFileUploaderDropzone"] * {{
+                color: {theme["text"]} !important;
+            }}
+            [data-testid="stFileUploaderDropzone"] small,
+            [data-testid="stFileUploaderDropzone"] span {{
+                color: {theme["muted_text"]} !important;
+            }}
+            [data-testid="stDataFrame"],
+            [data-testid="stDataEditor"] {{
+                background: #FFFFFF !important;
+                border: 1px solid {theme["border"]} !important;
+                border-radius: 12px;
+            }}
+            [data-testid="stDataFrame"] div[role="grid"],
+            [data-testid="stDataEditor"] div[role="grid"] {{
+                background: #FFFFFF !important;
+            }}
+            [data-testid="stDataFrame"] div[role="columnheader"],
+            [data-testid="stDataEditor"] div[role="columnheader"] {{
+                background: #EAF0F7 !important;
+                color: {theme["text"]} !important;
+                border-color: {theme["border"]} !important;
+                font-weight: 700 !important;
+            }}
+            [data-testid="stDataFrame"] [role="columnheader"] *,
+            [data-testid="stDataEditor"] [role="columnheader"] *,
+            [data-testid="stDataFrame"] [role="gridcell"] *,
+            [data-testid="stDataEditor"] [role="gridcell"] * {{
+                color: {theme["text"]} !important;
+                fill: {theme["text"]} !important;
+            }}
+            [data-testid="stDataFrame"] div[role="gridcell"],
+            [data-testid="stDataEditor"] div[role="gridcell"] {{
+                background: #FFFFFF !important;
+                color: {theme["text"]} !important;
+                border-color: {theme["border"]} !important;
+            }}
+            [data-testid="stDataEditor"] input {{
+                color: {theme["text"]} !important;
+                -webkit-text-fill-color: {theme["text"]} !important;
+                background: #FFFFFF !important;
+            }}
+            [data-testid="stDataFrame"] div[role="row"]:nth-child(even) div[role="gridcell"],
+            [data-testid="stDataEditor"] div[role="row"]:nth-child(even) div[role="gridcell"] {{
+                background: #F8FBFF !important;
+            }}
+            [data-testid="stDataEditor"] [role="rowheader"],
+            [data-testid="stDataFrame"] [role="rowheader"] {{
+                background: #F3F7FD !important;
+                color: {theme["muted_text"]} !important;
+                border-color: {theme["border"]} !important;
+            }}
+            [data-testid="stExpander"] {{
+                background: #FFFFFF !important;
+                border: 1px solid {theme["border"]} !important;
+            }}
+            [data-testid="stExpander"] summary {{
+                background: #FFFFFF !important;
+                border-bottom: 1px solid {theme["border"]} !important;
+            }}
+            [data-testid="stExpander"] summary,
+            [data-testid="stExpander"] summary * {{
+                color: {theme["text"]} !important;
+            }}
+            [data-testid="stAlert"] {{
+                background: #FFF7F3 !important;
+                border: 1px solid {theme["danger_border"]} !important;
+                color: {theme["danger_text"]} !important;
+            }}
+            [data-testid="stAlert"] *,
+            [data-testid="stAlert"] p,
+            [data-testid="stAlert"] span {{
+                color: {theme["danger_text"]} !important;
+            }}
+            [data-testid="stAlert"] svg {{
+                fill: {theme["danger_text"]} !important;
+                color: {theme["danger_text"]} !important;
+            }}
+            .stFormSubmitButton > button,
+            [data-testid="stFormSubmitButton"] button,
+            .stButton > button[kind="primary"],
+            .stButton > button[kind="primaryFormSubmit"] {{
+                background: linear-gradient(180deg, {theme["accent_hover"]} 0%, {theme["accent"]} 100%) !important;
+                border: 1px solid {theme["accent_border"]} !important;
+                color: #FFFFFF !important;
+                box-shadow: 0 0 0 1px {theme["accent_ring"]}, 0 6px 16px {theme["accent_shadow"]} !important;
+            }}
+            .stFormSubmitButton > button *,
+            [data-testid="stFormSubmitButton"] button *,
+            .stButton > button[kind="primary"] *,
+            .stButton > button[kind="primaryFormSubmit"] * {{
+                color: #FFFFFF !important;
+            }}
+            .stCaptionContainer,
+            .stMarkdown,
+            .stMarkdown p,
+            .stMarkdown span {{
+                color: {theme["muted_text"]};
+            }}
+            .app-top-hero {{
+                border-color: {theme["border"]} !important;
+                background: linear-gradient(180deg, #FFFFFF 0%, #EEF4FB 100%) !important;
+            }}
+            .app-top-hero-fade {{
+                background: linear-gradient(90deg, rgba(244, 247, 251, 0.94) 0%, rgba(244, 247, 251, 0.82) 42%, rgba(244, 247, 251, 0.08) 72%, rgba(244, 247, 251, 0.00) 100%) !important;
+            }}
+            .app-top-hero-content .intro-card {{
+                border-color: {theme["accent_border"]} !important;
+                border-left-color: {theme["accent"]} !important;
+                background: linear-gradient(180deg, rgba(10, 116, 242, 0.08) 0%, rgba(234, 240, 247, 0.96) 100%) !important;
+                box-shadow: 0 8px 18px rgba(20, 32, 51, 0.08) !important;
+            }}
+            .app-top-hero-content .intro-card p,
+            .app-top-hero-content .intro-card p * {{
+                color: {theme["text"]} !important;
+            }}
+            .app-top-hero h1 {{
+                color: {theme["text"]} !important;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+render_theme_styles(CURRENT_UI_THEME)
 
 # ---------- МОДЕЛЬ ФУНКЦИЙ РАСЧЁТА ----------
 
@@ -611,6 +888,13 @@ def calc_new_clients_share_pct(new_clients: float, client_count: float) -> float
     new_clients = float(new_clients or 0.0)
     client_count = float(client_count or 0.0)
     return (new_clients / client_count * 100.0) if client_count > 0 else 0.0
+
+
+def round_entity_count(value: float) -> float:
+    value = float(value or 0.0)
+    if value <= 0:
+        return 0.0
+    return float(np.floor(value)) if USE_EXCEL_ROUNDDOWN else float(round(value))
 
 
 def safe_select_columns(df: pd.DataFrame, columns: list[str], fill_value=np.nan) -> pd.DataFrame:
@@ -2348,9 +2632,9 @@ if top_header_uri:
                     Медиапланер <span style="color: #00CDC5; font-size: 1.25em;">E-promo</span>
                 </h1>
                 <div class="intro-card">
-                    <p><span style="font-weight: 800; color: #9EC5FF;">Что это:</span>
+                    <p><span class="accent-inline" style="font-weight: 800;">Что это:</span>
                     инструмент для расчета медиаплана на выбранный период (от 1 до 12 месяцев) по типам рекламных кампаний.</p>
-                    <p class="one-line"><span style="font-weight: 800; color: #9EC5FF;">Зачем нужен:</span>
+                    <p class="one-line"><span class="accent-inline" style="font-weight: 800;">Зачем нужен:</span>
                     чтобы упростить алгоритм расчета медиаплана, сократить время на первичный расчет и ускорить внесение последующих правок.</p>
                 </div>
             </div>
@@ -2381,12 +2665,12 @@ else:
             background: linear-gradient(180deg, rgba(0, 102, 224, 0.18) 0%, rgba(17, 26, 46, 0.82) 100%);
             box-shadow: 0 8px 18px rgba(0, 0, 0, 0.20);
         ">
-            <p style="margin: 0 0 6px 0; color: #EAF0FF; line-height: 1.45;">
-                <span style="font-weight: 800; color: #9EC5FF;">Как это работает:</span>
+            <p class="text-inline" style="margin: 0 0 6px 0; line-height: 1.45;">
+                <span class="accent-inline" style="font-weight: 800;">Как это работает:</span>
                 Добавьте один или несколько коэффициентов по выбранным месяцам (от 1 до 12 месяцев) на основе доступных сценариев.
             </p>
-            <p style="margin: 0; color: #EAF0FF; line-height: 1.45;">
-                <span style="font-weight: 800; color: #9EC5FF;">Зачем нужно:</span>
+            <p class="text-inline" style="margin: 0; line-height: 1.45;">
+                <span class="accent-inline" style="font-weight: 800;">Зачем нужно:</span>
                 Чтобы гибко учитывать сезонные колебания, изменения спроса по выбранным месяцам и влияние медийных хвостов.
             </p>
         </div>
@@ -2527,6 +2811,24 @@ if top_header_uri:
 
 # Быстрый импорт доступен всегда (даже до первого расчета на вкладке "Медиаплан").
 with st.sidebar:
+    st.markdown("### Оформление")
+    theme_options = {cfg["label"]: key for key, cfg in UI_THEMES.items()}
+    current_theme_label = UI_THEMES[st.session_state["ui_theme"]]["label"]
+    selected_theme_label = st.radio(
+        "Тема интерфейса",
+        options=list(theme_options.keys()),
+        index=list(theme_options.keys()).index(current_theme_label),
+        key="ui_theme_selector",
+    )
+    selected_theme_key = theme_options[selected_theme_label]
+    if selected_theme_key != st.session_state.get("ui_theme"):
+        st.session_state["ui_theme"] = selected_theme_key
+        st.rerun()
+    st.markdown(
+        f"<div class='theme-chip'>Базовая тема: <b>{UI_THEMES['dark']['label']}</b><br>Светлая тема: <b>{UI_THEMES['warm_sand']['label']}</b></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("---")
     st.markdown("### Быстрый импорт проекта")
     st.caption("Загрузите JSON проекта сразу после запуска приложения.")
     uploaded_project_quick = st.file_uploader(
@@ -3125,7 +3427,7 @@ with tab_setup:
         <div class="tab-intro">
             <p>1) Выберите месяцы, для которых нужно рассчитать медиаплан.</p>
             <p>2) Выберите пресет метрик <b>E-com</b>, <b>DIY</b> или <b>Недвижимость</b>. Пресет влияет на состав метрик и логику отображения отдельных показателей в расчете.</p>
-            <p>3) Заполните данные по типам рекламных кампаний и базовым метрикам для расчета среднего месяца. Значения в блок «Средний месяц» вносятся <b><span style="color:#9EC5FF;">без НДС</span></b>. Помните: сезонность среднего месяца равна 1, и от нее рассчитываются все выбранные месяцы через коэффициенты.</p>
+            <p>3) Заполните данные по типам рекламных кампаний и базовым метрикам для расчета среднего месяца. Значения в блок «Средний месяц» вносятся <b><span class="accent-inline">без НДС</span></b>. Помните: сезонность среднего месяца равна 1, и от нее рассчитываются все выбранные месяцы через коэффициенты.</p>
             <p>4) При необходимости настройте учет <b>НДС</b> и <b>АК</b>: можно включить НДС, задать фиксированную АК на месяц или использовать шкалу АК от TOTAL бюджета месяца без НДС.</p>
             <p>5) Назначьте для каждого типа РК наборы коэффициентов: <b>Спрос</b>, <b>AOV</b>, <b>Кастомный набор</b> и при необходимости <b>Медийные хвосты</b>. Для пресета <b>Недвижимость</b> набор <b>AOV</b> не используется.</p>
             <p>6) Настройте эластичность метрик к сезонности спроса: можно выбрать пресет настроек или задать значения вручную для <b>CPC</b>, <b>CTR</b> и <b>CR</b>.</p>
@@ -3680,9 +3982,9 @@ with tab_setup:
                 max-width: 100%;
                 padding: 10px 12px;
                 border-radius: 10px;
-                border: 1px solid #FF8A66;
-                background: rgba(255, 99, 51, 0.14);
-                color: #FFD9CC;
+                border: 1px solid var(--danger-border);
+                background: var(--danger-bg);
+                color: var(--danger-text);
                 font-weight: 600;
             ">
                 {vat_warning_text}
@@ -4705,9 +5007,9 @@ with tab_setup:
             cap_avg = float(base_row.get("available_capacity_avg", 0.0) or 0.0)
             shipped_aov_avg = float(base_row.get("shipped_aov_avg", 0.0) or 0.0)
             out["available_capacity"] = cap_avg
-            out["client_count"] = float(base_row.get("client_count_avg", 0.0) or 0.0)
-            out["absolute_new_clients"] = float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0)
-            out["returned_clients"] = float(base_row.get("returned_clients_avg", 0.0) or 0.0)
+            out["client_count"] = round_entity_count(base_row.get("client_count_avg", 0.0))
+            out["absolute_new_clients"] = round_entity_count(base_row.get("absolute_new_clients_avg", 0.0))
+            out["returned_clients"] = round_entity_count(base_row.get("returned_clients_avg", 0.0))
             out["new_clients"] = float(out.get("absolute_new_clients", 0.0)) + float(out.get("returned_clients", 0.0))
             out["order_frequency"] = float(base_row.get("order_frequency_avg", 0.0) or 0.0)
             out["new_clients_share_pct"] = calc_new_clients_share_pct(out["new_clients"], out["client_count"])
@@ -5774,9 +6076,9 @@ with tab_plan:
                 if k_row.empty:
                     k_imp = k_reach = k_capacity = k_client_count = k_absolute_new_clients = k_returned_clients = k_order_frequency = k_ctr = k_cpc = k_cr = k_cr2 = k_aov = 1.0
                     available_capacity_month = float(base_row.get("available_capacity_avg", 0.0) or 0.0)
-                    client_count_month = float(base_row.get("client_count_avg", 0.0) or 0.0)
-                    absolute_new_clients_month = float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0)
-                    returned_clients_month = float(base_row.get("returned_clients_avg", 0.0) or 0.0)
+                    client_count_month = round_entity_count(base_row.get("client_count_avg", 0.0))
+                    absolute_new_clients_month = round_entity_count(base_row.get("absolute_new_clients_avg", 0.0))
+                    returned_clients_month = round_entity_count(base_row.get("returned_clients_avg", 0.0))
                     order_frequency_month = float(base_row.get("order_frequency_avg", 0.0) or 0.0)
                     shipped_aov_month = float(base_row.get("shipped_aov_avg", 0.0) or 0.0)
                 else:
@@ -5794,9 +6096,9 @@ with tab_plan:
                     k_cr2 = float(k_row.get("k_cr2", k_cr) or k_cr)
                     k_aov = float(k_row.get("k_aov", 1.0) or 1.0)
                     available_capacity_month = float(base_row.get("available_capacity_avg", 0.0) or 0.0) * k_capacity
-                    client_count_month = float(base_row.get("client_count_avg", 0.0) or 0.0) * k_client_count
-                    absolute_new_clients_month = float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0) * k_absolute_new_clients
-                    returned_clients_month = float(base_row.get("returned_clients_avg", 0.0) or 0.0) * k_returned_clients
+                    client_count_month = round_entity_count(float(base_row.get("client_count_avg", 0.0) or 0.0) * k_client_count)
+                    absolute_new_clients_month = round_entity_count(float(base_row.get("absolute_new_clients_avg", 0.0) or 0.0) * k_absolute_new_clients)
+                    returned_clients_month = round_entity_count(float(base_row.get("returned_clients_avg", 0.0) or 0.0) * k_returned_clients)
                     order_frequency_month = float(base_row.get("order_frequency_avg", 0.0) or 0.0) * k_order_frequency
                     shipped_aov_month = float(base_row.get("shipped_aov_avg", 0.0) or 0.0) * k_aov
 
@@ -7019,8 +7321,8 @@ with tab_charts:
             border: 1px solid #2B7EE8;
             background: rgba(10, 116, 242, 0.12);
         ">
-            <span style="font-weight: 800; color: #9EC5FF;">Назначение блока:</span>
-            <span style="color: #EAF0FF; font-weight: 560;">
+            <span class="accent-inline" style="font-weight: 800;">Назначение блока:</span>
+            <span class="text-inline" style="font-weight: 560;">
                 Вкладка используется для финальной проверки расчетов медиаплана: через фильтры и визуализации можно валидировать корректность формул, распределений и итоговых значений.
             </span>
         </div>
