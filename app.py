@@ -1883,6 +1883,12 @@ TEMPLATE_PATHS_DIY = [
     os.path.join(BASE_DIR, "Шаблоны МП DIY.xlsx"),
     os.path.join(BASE_DIR, "templates", "Shablony-MP-DIY.xlsx"),
 ]
+TEMPLATE_PATHS_DIY_CLIENT = [
+    os.path.join(BASE_DIR, "templates", "МП _ ВсеИнструменты.ру.xlsx"),
+    os.path.join(BASE_DIR, "МП _ ВсеИнструменты.ру.xlsx"),
+    os.path.join(BASE_DIR, "templates", "diy_client_template.xlsx"),
+    os.path.join(BASE_DIR, "diy_client_template.xlsx"),
+]
 TEMPLATE_PATHS_REAL_ESTATE_SIMPLE = [
     os.path.join(BASE_DIR, "templates", "Шаблоны МП Недвижка упр. воронка.xlsx"),
     os.path.join(BASE_DIR, "Шаблоны МП Недвижка упр. воронка.xlsx"),
@@ -1894,6 +1900,7 @@ TEMPLATE_PATHS_REAL_ESTATE_FULL = [
 TEMPLATE_PATHS_BY_KIND = {
     "ecom": TEMPLATE_PATHS_ECOM,
     "diy": TEMPLATE_PATHS_DIY,
+    "diy_client": TEMPLATE_PATHS_DIY_CLIENT,
     "real_estate_simple": TEMPLATE_PATHS_REAL_ESTATE_SIMPLE,
     "real_estate_full": TEMPLATE_PATHS_REAL_ESTATE_FULL,
 }
@@ -1942,10 +1949,44 @@ def build_excel_from_template(df_all: pd.DataFrame,
     is_real_estate_template = template_kind in {"real_estate_simple", "real_estate_full"}
     is_real_estate_full_template = template_kind == "real_estate_full"
     is_diy_template = template_kind == "diy"
+    is_diy_client_template = template_kind == "diy_client"
 
-    if is_diy_template:
+    if is_diy_client_template:
+        COL_PERIOD = "A"
+        COL_SEGMENT = "B"
+        COL_SYSTEM = "C"
+        COL_FORMAT = "D"
+        COL_TARGETING = "E"
+        COL_MODEL = "F"
+        COL_UNIT = "G"
+        COL_CPC = "I"
+        COL_GEO = "E"
+        COL_DEMAND_COEFF = None
+        COL_OTHER = None
+        COL_TOTAL_GEO = "E"
+        COL_AK = "J"
+        COL_IMPRESSIONS = "P"
+        COL_CTR = "Q"
+        COL_CR = "V"
+        COL_CR2 = "AC"
+        COL_AOV = "Z"
+        COL_SHIPPED_AOV = "AG"
+        COL_AVAILABLE_CAPACITY = None
+        COL_FREQUENCY = None
+        COL_CLIENT_COUNT = None
+        COL_ABSOLUTE_NEW_CLIENTS = "AJ"
+        COL_RETURNED_CLIENTS = "AK"
+        COL_ORDER_FREQUENCY = "AI"
+        COL_NEW_CLIENTS_SHARE = None
+        COL_REACH = None
+        COL_CLIENT_CVR = None
+        COL_CPA_ACTIVE_WEBMASTERS = "AO"
+        COL_CPA_APPROVE_PCT = "AP"
+    elif is_diy_template:
         COL_PERIOD = "G"
+        COL_SEGMENT = None
         COL_MODEL = "H"
+        COL_UNIT = None
         COL_CPC = "I"
         COL_GEO = "E"
         COL_DEMAND_COEFF = None
@@ -1966,9 +2007,14 @@ def build_excel_from_template(df_all: pd.DataFrame,
         COL_ORDER_FREQUENCY = "AC"
         COL_NEW_CLIENTS_SHARE = None
         COL_REACH = None
+        COL_CLIENT_CVR = None
+        COL_CPA_ACTIVE_WEBMASTERS = None
+        COL_CPA_APPROVE_PCT = None
     else:
         COL_PERIOD = "F"
+        COL_SEGMENT = None
         COL_MODEL = "G"
+        COL_UNIT = None
         COL_CPC = "H"
         COL_GEO = "K" if is_real_estate_template else None
         COL_DEMAND_COEFF = "L" if is_real_estate_template else None
@@ -1979,6 +2025,9 @@ def build_excel_from_template(df_all: pd.DataFrame,
         COL_ABSOLUTE_NEW_CLIENTS = None
         COL_RETURNED_CLIENTS = None
         COL_ORDER_FREQUENCY = None
+        COL_CLIENT_CVR = None
+        COL_CPA_ACTIVE_WEBMASTERS = None
+        COL_CPA_APPROVE_PCT = None
     if is_real_estate_template:
         COL_AK = "Q"
         COL_IMPRESSIONS = "V"
@@ -2009,6 +2058,12 @@ def build_excel_from_template(df_all: pd.DataFrame,
 
     def _norm_segment(v) -> str:
         t = _safe_text(v).replace(" ", "")
+        # Client templates sometimes use Cyrillic lookalikes like "В2В"/"В2С".
+        t = (
+            t.replace("в", "b")
+             .replace("с", "c")
+             .replace("б", "b")
+        )
         if "b2b" in t:
             return "B2B"
         if "b2c" in t:
@@ -2016,6 +2071,14 @@ def build_excel_from_template(df_all: pd.DataFrame,
         return ""
 
     def _is_header_row(sheet, r: int) -> bool:
+        if is_diy_client_template:
+            a = _safe_text(sheet[f"A{r}"].value).replace(" ", "")
+            b = _safe_text(sheet[f"B{r}"].value).replace(" ", "")
+            c = _safe_text(sheet[f"C{r}"].value).replace(" ", "")
+            d = _safe_text(sheet[f"D{r}"].value).replace(" ", "")
+            p = _safe_text(sheet[f"P{r}"].value).replace(" ", "")
+            return a == "месяц+год" and b == "типклиента" and c == "площадка" and d == "формат" and p == "кол-вопоказов"
+
         b = sheet[f"{COL_SYSTEM}{r}"].value
         c = sheet[f"{COL_FORMAT}{r}"].value
         d = sheet[f"{COL_TARGETING}{r}"].value
@@ -2029,6 +2092,9 @@ def build_excel_from_template(df_all: pd.DataFrame,
         return True
 
     def _detect_periods_layout() -> tuple[int, int, int]:
+        if is_diy_client_template:
+            return 2, 115, 110
+
         header_rows = []
         for r in range(1, min(ws.max_row, 500) + 1):
             if _is_header_row(ws, r):
@@ -2062,6 +2128,9 @@ def build_excel_from_template(df_all: pd.DataFrame,
         return start_row, block_step, rows_per_month
 
     def _detect_total_layout(default_rows_per_month: int) -> tuple[int, int]:
+        if is_diy_client_template:
+            return 2, 110
+
         header_row = None
         for r in range(1, min(ws_total.max_row, 200) + 1):
             if _is_header_row(ws_total, r):
@@ -2087,10 +2156,44 @@ def build_excel_from_template(df_all: pd.DataFrame,
     START_ROW_JAN, BLOCK_STEP, ROWS_PER_MONTH = _detect_periods_layout()
     START_ROW_TOTAL, ROWS_PER_MONTH_TOTAL = _detect_total_layout(ROWS_PER_MONTH)
     period_rows_for_hide: list[int] = []
+    diy_client_header_rows = []
+    if is_diy_client_template:
+        for r in range(1, ws.max_row + 1):
+            if _is_header_row(ws, r):
+                diy_client_header_rows.append(r)
+        diy_client_total_header_rows = []
+        for r in range(1, ws_total.max_row + 1):
+            if _is_header_row(ws_total, r):
+                diy_client_total_header_rows.append(r)
+    else:
+        diy_client_total_header_rows = []
 
     def _write_period_row(row_excel: int, camp_row: pd.Series | None, row_data: pd.Series | None, period_str: str):
-        ws.row_dimensions[row_excel].hidden = False
         if camp_row is None or row_data is None:
+            if is_diy_client_template:
+                ws.row_dimensions[row_excel].hidden = True
+                ws[f"A{row_excel}"] = None
+                ws[f"B{row_excel}"] = None
+                ws[f"C{row_excel}"] = None
+                ws[f"D{row_excel}"] = None
+                ws[f"E{row_excel}"] = None
+                ws[f"F{row_excel}"] = None
+                ws[f"G{row_excel}"] = None
+                ws[f"I{row_excel}"] = None
+                ws[f"J{row_excel}"] = None
+                ws[f"P{row_excel}"] = None
+                ws[f"Q{row_excel}"] = None
+                ws[f"V{row_excel}"] = None
+                ws[f"Z{row_excel}"] = None
+                ws[f"AC{row_excel}"] = None
+                ws[f"AG{row_excel}"] = None
+                ws[f"AI{row_excel}"] = None
+                ws[f"AJ{row_excel}"] = None
+                ws[f"AK{row_excel}"] = None
+                ws[f"AO{row_excel}"] = None
+                ws[f"AP{row_excel}"] = None
+                return
+            ws.row_dimensions[row_excel].hidden = False
             ws[f"{COL_SYSTEM}{row_excel}"] = None
             ws[f"{COL_FORMAT}{row_excel}"] = None
             ws[f"{COL_TARGETING}{row_excel}"] = None
@@ -2131,6 +2234,7 @@ def build_excel_from_template(df_all: pd.DataFrame,
                 ws[f"{COL_SHIPPED_AOV}{row_excel}"] = None
             return
 
+        ws.row_dimensions[row_excel].hidden = False
         impressions = float(row_data["impressions"])
         ctr = float(row_data["ctr"])
         cpc = float(row_data["cpc"])
@@ -2167,6 +2271,36 @@ def build_excel_from_template(df_all: pd.DataFrame,
         demand_coeff = float(row_data.get("k_demand_applied", 1.0) or 1.0)
         if pd.isna(demand_coeff):
             demand_coeff = 1.0
+
+        if is_diy_client_template:
+            month_name = str(row_data.get("month_name", camp_row.get("month_name", "")) or "")
+            segment = _norm_segment(camp_row.get("segment", ""))
+            rounded_units = float(np.floor(impressions * ctr)) if USE_EXCEL_ROUNDDOWN else float(round(impressions * ctr))
+            target_budget_with_vat_ak = float(row_data.get("cost_with_vat_ak", 0.0) or 0.0)
+            cpc_with_vat = cpc * 1.22
+            if rounded_units > 0:
+                cpc_with_vat = target_budget_with_vat_ak / (rounded_units * (1.0 + ak_rate)) if (1.0 + ak_rate) > 0 else cpc_with_vat
+            ws[f"A{row_excel}"] = month_name
+            ws[f"B{row_excel}"] = segment
+            ws[f"C{row_excel}"] = camp_row.get("system", "")
+            ws[f"D{row_excel}"] = camp_row.get("campaign_type", "")
+            ws[f"E{row_excel}"] = camp_row.get("geo", "")
+            ws[f"F{row_excel}"] = "CPC"
+            ws[f"G{row_excel}"] = "клик"
+            ws[f"I{row_excel}"] = cpc_with_vat
+            ws[f"J{row_excel}"] = ak_rate
+            ws[f"P{row_excel}"] = impressions
+            ws[f"Q{row_excel}"] = ctr
+            ws[f"V{row_excel}"] = cr
+            ws[f"Z{row_excel}"] = aov
+            ws[f"AC{row_excel}"] = cr2
+            ws[f"AG{row_excel}"] = shipped_aov
+            ws[f"AI{row_excel}"] = order_frequency
+            ws[f"AJ{row_excel}"] = absolute_new_clients
+            ws[f"AK{row_excel}"] = returned_clients
+            ws[f"AO{row_excel}"] = None
+            ws[f"AP{row_excel}"] = None
+            return
 
         ws[f"{COL_SYSTEM}{row_excel}"] = camp_row.get("system", "")
         ws[f"{COL_FORMAT}{row_excel}"] = camp_row.get("campaign_type", "")
@@ -2210,13 +2344,30 @@ def build_excel_from_template(df_all: pd.DataFrame,
             ws[f"{COL_SHIPPED_AOV}{row_excel}"] = shipped_aov
 
     def _write_total_row(row_excel: int, camp_row: pd.Series | None):
-        ws_total.row_dimensions[row_excel].hidden = False
         if camp_row is None:
+            if is_diy_client_template:
+                ws_total.row_dimensions[row_excel].hidden = True
+                for col in ["A", "B", "C", "D", "E", "F", "G"]:
+                    ws_total[f"{col}{row_excel}"] = None
+                return
+            ws_total.row_dimensions[row_excel].hidden = False
             ws_total[f"{COL_SYSTEM}{row_excel}"] = None
             ws_total[f"{COL_FORMAT}{row_excel}"] = None
             ws_total[f"{COL_TARGETING}{row_excel}"] = None
             if COL_TOTAL_GEO:
                 ws_total[f"{COL_TOTAL_GEO}{row_excel}"] = None
+            return
+        ws_total.row_dimensions[row_excel].hidden = False
+        if is_diy_client_template:
+            period_years = sorted({int(p.get("month_year", dt.date.today().year) or dt.date.today().year) for p in selected_periods})
+            period_label_total = str(period_years[0]) if len(period_years) == 1 else f"{period_years[0]}-{period_years[-1]}"
+            ws_total[f"A{row_excel}"] = period_label_total
+            ws_total[f"B{row_excel}"] = _norm_segment(camp_row.get("segment", ""))
+            ws_total[f"C{row_excel}"] = camp_row.get("system", "")
+            ws_total[f"D{row_excel}"] = camp_row.get("campaign_type", "")
+            ws_total[f"E{row_excel}"] = camp_row.get("geo", "")
+            ws_total[f"F{row_excel}"] = "CPC"
+            ws_total[f"G{row_excel}"] = "клик"
             return
         ws_total[f"{COL_SYSTEM}{row_excel}"] = camp_row.get("system", "")
         ws_total[f"{COL_FORMAT}{row_excel}"] = camp_row.get("campaign_type", "")
@@ -2255,6 +2406,20 @@ def build_excel_from_template(df_all: pd.DataFrame,
         b2c_rows = list(range(b2c_start_row, row_b2c_total))
         return b2c_rows, b2b_rows
 
+    def _collect_diy_client_period_rows(header_row: int, next_header_row: int | None = None) -> tuple[list[int], list[int]] | None:
+        # Client template has a fixed block layout:
+        # header
+        # B2B rows:   +1  .. +55
+        # B2B total:  +56
+        # B2C rows:   +57 .. +111
+        # B2C total:  +112
+        # Total:      +113
+        b2b_rows = list(range(header_row + 1, header_row + 56))
+        b2c_rows = list(range(header_row + 57, header_row + 112))
+        if next_header_row and next_header_row <= (header_row + 57):
+            return None
+        return b2b_rows, b2c_rows
+
     def _collect_diy_total_rows() -> tuple[list[int], list[int]] | None:
         scan_from = START_ROW_TOTAL
         scan_to = min(ws_total.max_row, START_ROW_TOTAL + ROWS_PER_MONTH_TOTAL + 40)
@@ -2282,6 +2447,11 @@ def build_excel_from_template(df_all: pd.DataFrame,
         b2c_rows = list(range(b2c_start_row, row_b2c_total))
         return b2c_rows, b2b_rows
 
+    def _collect_diy_client_total_rows(header_row: int) -> tuple[list[int], list[int]] | None:
+        b2b_rows = list(range(header_row + 1, header_row + 56))
+        b2c_rows = list(range(header_row + 57, header_row + 112))
+        return b2b_rows, b2c_rows
+
     def _match_row_data(df_scope: pd.DataFrame, camp_row: pd.Series) -> pd.Series | None:
         if df_scope is None or df_scope.empty or camp_row is None:
             return None
@@ -2305,7 +2475,14 @@ def build_excel_from_template(df_all: pd.DataFrame,
         month_num = int(period.get("month_num", 1) or 1)
         year = int(period.get("month_year", dt.date.today().year) or dt.date.today().year)
         planning_slot = int(period.get("planning_slot", block_index + 1) or (block_index + 1))
-        block_start_row = START_ROW_JAN + block_index * BLOCK_STEP
+        if is_diy_client_template and block_index < len(diy_client_header_rows):
+            header_row_current = diy_client_header_rows[block_index]
+            next_header_row_current = diy_client_header_rows[block_index + 1] if (block_index + 1) < len(diy_client_header_rows) else None
+            block_start_row = header_row_current + 1
+        else:
+            header_row_current = None
+            next_header_row_current = None
+            block_start_row = START_ROW_JAN + block_index * BLOCK_STEP
         start = dt.date(year, month_num, 1)
         end = dt.date(year, 12, 31) if month_num == 12 else dt.date(year, month_num + 1, 1) - dt.timedelta(days=1)
         period_str = f"{start.strftime('%d.%m.%Y')} - {end.strftime('%d.%m.%Y')}"
@@ -2315,8 +2492,46 @@ def build_excel_from_template(df_all: pd.DataFrame,
             df_month = df_all[df_all["month_num"] == month_num]
 
         diy_period_rows = _collect_diy_period_rows(block_start_row) if (template_kind == "diy" and "segment" in campaigns.columns) else None
+        diy_client_period_rows = _collect_diy_client_period_rows(header_row_current, next_header_row_current) if (template_kind == "diy_client" and "segment" in campaigns.columns and header_row_current is not None) else None
 
-        if diy_period_rows is not None:
+        if diy_client_period_rows is not None:
+            b2b_rows, b2c_rows = diy_client_period_rows
+            period_rows_for_hide.extend(b2b_rows)
+            period_rows_for_hide.extend(b2c_rows)
+            camps = campaigns.copy()
+            camps["_seg"] = camps["segment"].map(_norm_segment)
+            camps_b2b = camps[camps["_seg"] == "B2B"]
+            camps_b2c = camps[camps["_seg"] == "B2C"]
+
+            for row_excel, (_, camp) in zip(b2b_rows, camps_b2b.iterrows()):
+                row_data = _match_row_data(df_month, camp)
+                _write_period_row(row_excel, camp, row_data, period_str)
+            for row_excel in b2b_rows[len(camps_b2b):]:
+                _write_period_row(row_excel, None, None, period_str)
+
+            for row_excel, (_, camp) in zip(b2c_rows, camps_b2c.iterrows()):
+                row_data = _match_row_data(df_month, camp)
+                _write_period_row(row_excel, camp, row_data, period_str)
+            for row_excel in b2c_rows[len(camps_b2c):]:
+                _write_period_row(row_excel, None, None, period_str)
+
+            writable_rows = set(b2b_rows) | set(b2c_rows)
+            block_end_row = (next_header_row_current - 1) if next_header_row_current else ws.max_row
+            for r in range((header_row_current + 1), block_end_row + 1):
+                if r in writable_rows:
+                    continue
+                a = _safe_text(ws[f"A{r}"].value)
+                b = _norm_segment(ws[f"B{r}"].value)
+                c = ws[f"C{r}"].value
+                d = ws[f"D{r}"].value
+                if a == "итого":
+                    continue
+                if b not in ("B2B", "B2C"):
+                    continue
+                if any(v not in (None, "") for v in [c, d]):
+                    continue
+                _write_period_row(r, None, None, period_str)
+        elif diy_period_rows is not None:
             b2c_rows, b2b_rows = diy_period_rows
             period_rows_for_hide.extend(b2c_rows)
             period_rows_for_hide.extend(b2b_rows)
@@ -2376,10 +2591,41 @@ def build_excel_from_template(df_all: pd.DataFrame,
                 rows_to_hide_periods.append(row_excel)
         for row_idx in sorted(set(rows_to_hide_periods)):
             ws.row_dimensions[row_idx].hidden = True
+        if is_diy_client_template:
+            for row_idx in range(1, ws.max_row + 1):
+                a = _safe_text(ws[f"A{row_idx}"].value)
+                b = _norm_segment(ws[f"B{row_idx}"].value)
+                c = ws[f"C{row_idx}"].value
+                d = ws[f"D{row_idx}"].value
+                if a in ("", "месяц+год", "итого"):
+                    continue
+                if b not in ("B2B", "B2C"):
+                    continue
+                if any(v not in (None, "") for v in [c, d]):
+                    continue
+                _write_period_row(row_idx, None, None, "")
 
     diy_total_rows = _collect_diy_total_rows() if (template_kind == "diy" and "segment" in campaigns.columns) else None
+    diy_client_total_rows = _collect_diy_client_total_rows(diy_client_total_header_rows[0]) if (template_kind == "diy_client" and "segment" in campaigns.columns and diy_client_total_header_rows) else None
 
-    if diy_total_rows is not None:
+    if diy_client_total_rows is not None:
+        b2b_rows_t, b2c_rows_t = diy_client_total_rows
+        total_rows_for_hide = list(b2b_rows_t) + list(b2c_rows_t)
+        camps = campaigns.copy()
+        camps["_seg"] = camps["segment"].map(_norm_segment)
+        camps_b2b = camps[camps["_seg"] == "B2B"]
+        camps_b2c = camps[camps["_seg"] == "B2C"]
+
+        for row_excel, (_, camp) in zip(b2b_rows_t, camps_b2b.iterrows()):
+            _write_total_row(row_excel, camp)
+        for row_excel in b2b_rows_t[len(camps_b2b):]:
+            _write_total_row(row_excel, None)
+
+        for row_excel, (_, camp) in zip(b2c_rows_t, camps_b2c.iterrows()):
+            _write_total_row(row_excel, camp)
+        for row_excel in b2c_rows_t[len(camps_b2c):]:
+            _write_total_row(row_excel, None)
+    elif diy_total_rows is not None:
         b2c_rows_t, b2b_rows_t = diy_total_rows
         total_rows_for_hide = list(b2c_rows_t) + list(b2b_rows_t)
         camps = campaigns.copy()
@@ -2416,6 +2662,19 @@ def build_excel_from_template(df_all: pd.DataFrame,
                 rows_to_hide_total.append(row_excel)
         for row_idx in sorted(set(rows_to_hide_total)):
             ws_total.row_dimensions[row_idx].hidden = True
+        if is_diy_client_template:
+            for row_idx in range(1, ws_total.max_row + 1):
+                a = _safe_text(ws_total[f"A{row_idx}"].value)
+                b = _norm_segment(ws_total[f"B{row_idx}"].value)
+                c = ws_total[f"C{row_idx}"].value
+                d = ws_total[f"D{row_idx}"].value
+                if a in ("", "месяц+год", "итого"):
+                    continue
+                if b not in ("B2B", "B2C"):
+                    continue
+                if any(v not in (None, "") for v in [c, d]):
+                    continue
+                _write_total_row(row_idx, None)
 
     output = BytesIO()
     wb.save(output)
@@ -8686,6 +8945,25 @@ with tab_export:
                             )
                         else:
                             st.info("Шаблон DIY не найден. Добавьте файл в один из путей: " + ", ".join(TEMPLATE_PATHS_DIY))
+
+                        resolved_tpl_diy_client = resolve_template_path("diy_client")
+                        if resolved_tpl_diy_client:
+                            tpl_buf_diy_client = build_excel_from_template(
+                                df_all=template_df_export,
+                                campaigns=template_campaigns,
+                                selected_periods=template_periods,
+                                template_kind="diy_client",
+                            )
+                            st.download_button(
+                                "Скачать Excel по шаблону DIY клиентский",
+                                data=tpl_buf_diy_client.getvalue(),
+                                file_name=f"mediaplan_template_diy_client_{timestamp}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key="download_export_template_xlsx_diy_client",
+                                disabled=not allow_diy_template,
+                            )
+                        else:
+                            st.info("Шаблон DIY клиентский не найден. Добавьте файл в один из путей: " + ", ".join(TEMPLATE_PATHS_DIY_CLIENT))
 
                         resolved_tpl_real_estate_simple = resolve_template_path("real_estate_simple")
                         if resolved_tpl_real_estate_simple:
