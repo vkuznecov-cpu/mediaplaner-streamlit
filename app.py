@@ -2718,6 +2718,17 @@ def build_excel_from_template(df_all: pd.DataFrame,
                     continue
                 _write_total_row(row_idx, None)
 
+    if is_diy_client_template:
+        for row_idx in range(1, ws_total.max_row + 1):
+            a_raw = ws_total[f"A{row_idx}"].value
+            b_seg = _norm_segment(ws_total[f"B{row_idx}"].value)
+            is_total_line = _is_total_text(a_raw)
+            is_campaign_line = b_seg in ("B2B", "B2C")
+            if not is_total_line and not is_campaign_line:
+                continue
+            if ws_total[f"V{row_idx}"].value not in (None, ""):
+                ws_total[f"V{row_idx}"] = f'=IFERROR(T{row_idx}/R{row_idx}, "-")'
+
     if (
         is_diy_client_template
         and not use_rf_periods_sheet
@@ -2820,9 +2831,19 @@ def build_template_export_payload(
     df_template["ak_rate_pct"] = df_template["ak_rate"] * 100.0
     df_template["new_clients_share_pct"] = _safe_ratio("new_clients", "client_count", pct=True)
     df_template["sov_pct"] = _safe_ratio("reach", "available_capacity", pct=True)
-    # For collapsed RF export this metric is intentionally left empty:
-    # the specialist can set it manually in the template.
-    df_template["order_frequency"] = np.nan
+    if "order_frequency" in df_export.columns:
+        order_frequency_avg = (
+            df_export
+            .groupby(group_cols, as_index=False, sort=False)["order_frequency"]
+            .mean()
+            .rename(columns={"order_frequency": "order_frequency_avg"})
+        )
+        df_template = df_template.merge(order_frequency_avg, on=group_cols, how="left")
+        df_template["order_frequency"] = pd.to_numeric(
+            df_template.pop("order_frequency_avg"), errors="coerce"
+        )
+    else:
+        df_template["order_frequency"] = np.nan
     df_template["cac"] = _safe_ratio("cost_with_vat_ak", "new_clients", pct=False)
     df_template["cpm"] = np.where(
         pd.to_numeric(df_template.get("impressions", 0.0), errors="coerce").fillna(0.0) > 0,
@@ -8978,6 +8999,12 @@ with tab_export:
                         cost_with_vat_ak=("cost_with_vat_ak", "sum"),
                         revenue=("revenue", "sum"),
                     ).sort_values("planning_slot")
+                    if "order_frequency" in df_export.columns:
+                        agg_month["order_frequency"] = (
+                            df_export.groupby(["planning_slot", "month_num", "month_year", "month_name"])["order_frequency"]
+                            .mean()
+                            .values
+                        )
                     agg_month["ctr_pct"] = np.where(agg_month["impressions"] > 0, agg_month["clicks"] / agg_month["impressions"] * 100.0, 0.0)
                     agg_month["cpc"] = np.where(agg_month["clicks"] > 0, agg_month["cost"] / agg_month["clicks"], 0.0)
                     agg_month["cr_pct"] = np.where(agg_month["clicks"] > 0, agg_month["conversions"] / agg_month["clicks"] * 100.0, 0.0)
@@ -9020,6 +9047,7 @@ with tab_export:
                             "cpql": "CPQL, ₽",
                             "roas": "ROAS",
                             "drr_pct": "ДРР, %",
+                            "order_frequency": "Частота заказа",
                         }
                     )
                     agg_month = normalize_entity_columns(agg_month, ["impressions"])
