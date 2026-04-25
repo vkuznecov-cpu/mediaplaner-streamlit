@@ -569,7 +569,8 @@ class PlanInput:
 
 
 def calculate_plan_month(inp: PlanInput) -> dict:
-    raw_clicks = inp.impressions * inp.ctr
+    impressions = round_entity_count(inp.impressions)
+    raw_clicks = impressions * inp.ctr
     clicks = np.floor(raw_clicks) if USE_EXCEL_ROUNDDOWN else raw_clicks
     # В шаблоне Excel стоимость считается от S*CTR (до округления кликов).
     cost = raw_clicks * inp.cpc
@@ -592,7 +593,7 @@ def calculate_plan_month(inp: PlanInput) -> dict:
             conv = target_leads
             revenue = 0.0
             cr_total = inp.cr
-        cpm = cost / (inp.impressions / 1000) if inp.impressions > 0 else 0
+        cpm = cost / (impressions / 1000) if impressions > 0 else 0
         cpa = cost / conv if conv > 0 else 0
         roas = 0.0
         drr = 0.0
@@ -600,7 +601,7 @@ def calculate_plan_month(inp: PlanInput) -> dict:
         conv = np.floor(clicks * inp.cr) if USE_EXCEL_ROUNDDOWN else (clicks * inp.cr)
         target_leads = np.floor(conv * inp.cr2) if USE_EXCEL_ROUNDDOWN else (conv * inp.cr2)
         revenue = conv * inp.aov
-        cpm = cost / (inp.impressions / 1000) if inp.impressions > 0 else 0
+        cpm = cost / (impressions / 1000) if impressions > 0 else 0
         cpa = cost / conv if conv > 0 else 0
         roas = revenue / cost if cost > 0 else 0
         drr = cost / revenue if revenue > 0 else 0
@@ -609,17 +610,17 @@ def calculate_plan_month(inp: PlanInput) -> dict:
     else:
         conv = np.floor(clicks * inp.cr) if USE_EXCEL_ROUNDDOWN else (clicks * inp.cr)
         revenue = conv * inp.aov
-        cpm = cost / (inp.impressions / 1000) if inp.impressions > 0 else 0
+        cpm = cost / (impressions / 1000) if impressions > 0 else 0
         cpa = cost / conv if conv > 0 else 0
         roas = revenue / cost if cost > 0 else 0
         drr = cost / revenue if revenue > 0 else 0
         cr_total = inp.cr
 
     reach = max(0.0, float(inp.reach or 0.0))
-    frequency = (inp.impressions / reach) if reach > 0 else 0.0
+    frequency = (impressions / reach) if reach > 0 else 0.0
 
     return {
-        "impressions": inp.impressions,
+        "impressions": impressions,
         "reach": reach,
         "frequency": frequency,
         "ctr": inp.ctr,
@@ -895,6 +896,16 @@ def round_entity_count(value: float) -> float:
     if value <= 0:
         return 0.0
     return float(np.floor(value)) if USE_EXCEL_ROUNDDOWN else float(round(value))
+
+
+def normalize_entity_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    out = df.copy()
+    for col in columns:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0).map(round_entity_count)
+    return out
 
 
 def safe_select_columns(df: pd.DataFrame, columns: list[str], fill_value=np.nan) -> pd.DataFrame:
@@ -1910,6 +1921,9 @@ def build_excel_from_template(df_all: pd.DataFrame,
                               campaigns: pd.DataFrame,
                               selected_periods: list[dict],
                               template_kind: str = "ecom",
+                              use_rf_periods_sheet: bool = False,
+                              rf_df_all: pd.DataFrame | None = None,
+                              rf_campaigns: pd.DataFrame | None = None,
                               compact_empty_rows: bool = True) -> BytesIO:
     selected_periods = normalize_selected_periods_for_template(list(selected_periods or []))
 
@@ -1926,7 +1940,9 @@ def build_excel_from_template(df_all: pd.DataFrame,
     periods_candidates = [s for s in wb.sheetnames if str(s).endswith("_Periods")]
     total_candidates = [s for s in wb.sheetnames if str(s).endswith("_Total")]
 
-    if periods_candidates:
+    if template_kind == "diy_client" and use_rf_periods_sheet and "Periods_RF" in wb.sheetnames:
+        ws = wb["Periods_RF"]
+    elif periods_candidates:
         ws = wb[periods_candidates[0]]
     elif len(wb.worksheets) >= 2:
         ws = wb.worksheets[1]
@@ -2056,6 +2072,10 @@ def build_excel_from_template(df_all: pd.DataFrame,
             return ""
         return str(v).strip().lower()
 
+    def _is_total_text(v) -> bool:
+        t = _safe_text(v)
+        return "итого" in t or "èòîãî" in t
+
     def _norm_segment(v) -> str:
         t = _safe_text(v).replace(" ", "")
         # Client templates sometimes use Cyrillic lookalikes like "В2В"/"В2С".
@@ -2172,26 +2192,8 @@ def build_excel_from_template(df_all: pd.DataFrame,
         if camp_row is None or row_data is None:
             if is_diy_client_template:
                 ws.row_dimensions[row_excel].hidden = True
-                ws[f"A{row_excel}"] = None
-                ws[f"B{row_excel}"] = None
-                ws[f"C{row_excel}"] = None
-                ws[f"D{row_excel}"] = None
-                ws[f"E{row_excel}"] = None
-                ws[f"F{row_excel}"] = None
-                ws[f"G{row_excel}"] = None
-                ws[f"I{row_excel}"] = None
-                ws[f"J{row_excel}"] = None
-                ws[f"P{row_excel}"] = None
-                ws[f"Q{row_excel}"] = None
-                ws[f"V{row_excel}"] = None
-                ws[f"Z{row_excel}"] = None
-                ws[f"AC{row_excel}"] = None
-                ws[f"AG{row_excel}"] = None
-                ws[f"AI{row_excel}"] = None
-                ws[f"AJ{row_excel}"] = None
-                ws[f"AK{row_excel}"] = None
-                ws[f"AO{row_excel}"] = None
-                ws[f"AP{row_excel}"] = None
+                for col in range(1, 45):  # A:AR
+                    ws.cell(row=row_excel, column=col).value = None
                 return
             ws.row_dimensions[row_excel].hidden = False
             ws[f"{COL_SYSTEM}{row_excel}"] = None
@@ -2235,7 +2237,7 @@ def build_excel_from_template(df_all: pd.DataFrame,
             return
 
         ws.row_dimensions[row_excel].hidden = False
-        impressions = float(row_data["impressions"])
+        impressions = round_entity_count(row_data["impressions"])
         ctr = float(row_data["ctr"])
         cpc = float(row_data["cpc"])
         cr = float(row_data["cr1"] if is_real_estate_full_template else row_data["cr"])
@@ -2295,6 +2297,7 @@ def build_excel_from_template(df_all: pd.DataFrame,
             ws[f"Z{row_excel}"] = aov
             ws[f"AC{row_excel}"] = cr2
             ws[f"AG{row_excel}"] = shipped_aov
+            ws[f"AH{row_excel}"] = client_count
             ws[f"AI{row_excel}"] = order_frequency
             ws[f"AJ{row_excel}"] = absolute_new_clients
             ws[f"AK{row_excel}"] = returned_clients
@@ -2347,7 +2350,12 @@ def build_excel_from_template(df_all: pd.DataFrame,
         if camp_row is None:
             if is_diy_client_template:
                 ws_total.row_dimensions[row_excel].hidden = True
-                for col in ["A", "B", "C", "D", "E", "F", "G"]:
+                for col in [
+                    "A", "B", "C", "D", "E", "F", "G",
+                    "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
+                    "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI",
+                    "AJ", "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR"
+                ]:
                     ws_total[f"{col}{row_excel}"] = None
                 return
             ws_total.row_dimensions[row_excel].hidden = False
@@ -2407,16 +2415,20 @@ def build_excel_from_template(df_all: pd.DataFrame,
         return b2c_rows, b2b_rows
 
     def _collect_diy_client_period_rows(header_row: int, next_header_row: int | None = None) -> tuple[list[int], list[int]] | None:
-        # Client template has a fixed block layout:
-        # header
-        # B2B rows:   +1  .. +55
-        # B2B total:  +56
-        # B2C rows:   +57 .. +111
-        # B2C total:  +112
-        # Total:      +113
-        b2b_rows = list(range(header_row + 1, header_row + 56))
-        b2c_rows = list(range(header_row + 57, header_row + 112))
-        if next_header_row and next_header_row <= (header_row + 57):
+        block_end_row = (next_header_row - 1) if next_header_row else ws.max_row
+        total_rows = [
+            r
+            for r in range(header_row + 1, block_end_row + 1)
+            if _is_total_text(ws[f"A{r}"].value)
+        ]
+        if len(total_rows) < 2:
+            return None
+
+        row_b2b_total = total_rows[0]
+        row_b2c_total = total_rows[1]
+        b2b_rows = list(range(header_row + 1, row_b2b_total))
+        b2c_rows = list(range(row_b2b_total + 1, row_b2c_total))
+        if not b2b_rows or not b2c_rows:
             return None
         return b2b_rows, b2c_rows
 
@@ -2448,14 +2460,36 @@ def build_excel_from_template(df_all: pd.DataFrame,
         return b2c_rows, b2b_rows
 
     def _collect_diy_client_total_rows(header_row: int) -> tuple[list[int], list[int]] | None:
-        b2b_rows = list(range(header_row + 1, header_row + 56))
-        b2c_rows = list(range(header_row + 57, header_row + 112))
+        total_rows = [
+            r
+            for r in range(header_row + 1, ws_total.max_row + 1)
+            if _is_total_text(ws_total[f"A{r}"].value)
+        ]
+        if len(total_rows) < 2:
+            return None
+
+        row_b2b_total = total_rows[0]
+        row_b2c_total = total_rows[1]
+        b2b_rows = list(range(header_row + 1, row_b2b_total))
+        b2c_rows = list(range(row_b2b_total + 1, row_b2c_total))
+        if not b2b_rows or not b2c_rows:
+            return None
         return b2b_rows, b2c_rows
 
     def _match_row_data(df_scope: pd.DataFrame, camp_row: pd.Series) -> pd.Series | None:
         if df_scope is None or df_scope.empty or camp_row is None:
             return None
         mask = df_scope["campaign_type"].astype(str) == str(camp_row.get("campaign_type", ""))
+        if "system" in df_scope.columns and "system" in camp_row.index:
+            mask &= (
+                df_scope["system"].fillna("").astype(str).str.strip()
+                == str(camp_row.get("system", "")).strip()
+            )
+        if "format" in df_scope.columns and "format" in camp_row.index:
+            mask &= (
+                df_scope["format"].fillna("").astype(str).str.strip()
+                == str(camp_row.get("format", "")).strip()
+            )
         if "segment" in df_scope.columns and "segment" in camp_row.index:
             mask &= (
                 df_scope["segment"].fillna("").astype(str).str.upper().str.strip()
@@ -2506,31 +2540,35 @@ def build_excel_from_template(df_all: pd.DataFrame,
             for row_excel, (_, camp) in zip(b2b_rows, camps_b2b.iterrows()):
                 row_data = _match_row_data(df_month, camp)
                 _write_period_row(row_excel, camp, row_data, period_str)
-            for row_excel in b2b_rows[len(camps_b2b):]:
-                _write_period_row(row_excel, None, None, period_str)
+            if (not is_diy_client_template) or use_rf_periods_sheet:
+                for row_excel in b2b_rows[len(camps_b2b):]:
+                    _write_period_row(row_excel, None, None, period_str)
 
             for row_excel, (_, camp) in zip(b2c_rows, camps_b2c.iterrows()):
                 row_data = _match_row_data(df_month, camp)
                 _write_period_row(row_excel, camp, row_data, period_str)
-            for row_excel in b2c_rows[len(camps_b2c):]:
-                _write_period_row(row_excel, None, None, period_str)
+            if (not is_diy_client_template) or use_rf_periods_sheet:
+                for row_excel in b2c_rows[len(camps_b2c):]:
+                    _write_period_row(row_excel, None, None, period_str)
 
-            writable_rows = set(b2b_rows) | set(b2c_rows)
-            block_end_row = (next_header_row_current - 1) if next_header_row_current else ws.max_row
-            for r in range((header_row_current + 1), block_end_row + 1):
-                if r in writable_rows:
-                    continue
-                a = _safe_text(ws[f"A{r}"].value)
-                b = _norm_segment(ws[f"B{r}"].value)
-                c = ws[f"C{r}"].value
-                d = ws[f"D{r}"].value
-                if a == "итого":
-                    continue
-                if b not in ("B2B", "B2C"):
-                    continue
-                if any(v not in (None, "") for v in [c, d]):
-                    continue
-                _write_period_row(r, None, None, period_str)
+            if (not is_diy_client_template) or use_rf_periods_sheet:
+                writable_rows = set(b2b_rows) | set(b2c_rows)
+                block_end_row = (next_header_row_current - 1) if next_header_row_current else ws.max_row
+                for r in range((header_row_current + 1), block_end_row + 1):
+                    if r in writable_rows:
+                        continue
+                    a_raw = ws[f"A{r}"].value
+                    a = _safe_text(a_raw)
+                    b = _norm_segment(ws[f"B{r}"].value)
+                    c = ws[f"C{r}"].value
+                    d = ws[f"D{r}"].value
+                    if _is_total_text(a_raw):
+                        continue
+                    if b not in ("B2B", "B2C"):
+                        continue
+                    if any(v not in (None, "") for v in [c, d]):
+                        continue
+                    _write_period_row(r, None, None, period_str)
         elif diy_period_rows is not None:
             b2c_rows, b2b_rows = diy_period_rows
             period_rows_for_hide.extend(b2c_rows)
@@ -2592,12 +2630,14 @@ def build_excel_from_template(df_all: pd.DataFrame,
         for row_idx in sorted(set(rows_to_hide_periods)):
             ws.row_dimensions[row_idx].hidden = True
         if is_diy_client_template:
+            pass
+        else:
             for row_idx in range(1, ws.max_row + 1):
                 a = _safe_text(ws[f"A{row_idx}"].value)
                 b = _norm_segment(ws[f"B{row_idx}"].value)
                 c = ws[f"C{row_idx}"].value
                 d = ws[f"D{row_idx}"].value
-                if a in ("", "месяц+год", "итого"):
+                if a in ("", "месяц+год") or _is_total_text(ws[f"A{row_idx}"].value):
                     continue
                 if b not in ("B2B", "B2C"):
                     continue
@@ -2663,18 +2703,46 @@ def build_excel_from_template(df_all: pd.DataFrame,
         for row_idx in sorted(set(rows_to_hide_total)):
             ws_total.row_dimensions[row_idx].hidden = True
         if is_diy_client_template:
+            pass
+        else:
             for row_idx in range(1, ws_total.max_row + 1):
                 a = _safe_text(ws_total[f"A{row_idx}"].value)
                 b = _norm_segment(ws_total[f"B{row_idx}"].value)
                 c = ws_total[f"C{row_idx}"].value
                 d = ws_total[f"D{row_idx}"].value
-                if a in ("", "месяц+год", "итого"):
+                if a in ("", "месяц+год") or _is_total_text(ws_total[f"A{row_idx}"].value):
                     continue
                 if b not in ("B2B", "B2C"):
                     continue
                 if any(v not in (None, "") for v in [c, d]):
                     continue
                 _write_total_row(row_idx, None)
+
+    if (
+        is_diy_client_template
+        and not use_rf_periods_sheet
+        and rf_df_all is not None
+        and rf_campaigns is not None
+        and "Periods_RF" in wb.sheetnames
+    ):
+        rf_buf = build_excel_from_template(
+            df_all=rf_df_all,
+            campaigns=rf_campaigns,
+            selected_periods=selected_periods,
+            template_kind=template_kind,
+            use_rf_periods_sheet=True,
+            compact_empty_rows=compact_empty_rows,
+        )
+        rf_buf.seek(0)
+        rf_wb = load_workbook(rf_buf)
+        if "Periods_RF" in rf_wb.sheetnames:
+            src_ws = rf_wb["Periods_RF"]
+            dst_ws = wb["Periods_RF"]
+            for row in src_ws.iter_rows():
+                for cell in row:
+                    dst_ws[cell.coordinate].value = cell.value
+            for row_idx in range(1, src_ws.max_row + 1):
+                dst_ws.row_dimensions[row_idx].hidden = src_ws.row_dimensions[row_idx].hidden
 
     output = BytesIO()
     wb.save(output)
@@ -2695,6 +2763,8 @@ def build_template_export_payload(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     df_template = df_export.copy()
     campaigns_template = campaigns_export.copy()
+    if "impressions" in df_template.columns:
+        df_template = normalize_entity_columns(df_template, ["impressions"])
 
     if not collapse_geo_to_rf:
         return df_template, campaigns_template
@@ -2717,6 +2787,7 @@ def build_template_export_payload(
     agg_map = {col: "sum" for col in sum_candidates if col in df_template.columns}
     df_template = df_template.groupby(group_cols, as_index=False, sort=False).agg(agg_map)
     df_template["geo"] = "РФ"
+    df_template = normalize_entity_columns(df_template, ["impressions"])
 
     def _safe_ratio(num_col: str, den_col: str, pct: bool = False) -> pd.Series:
         if num_col not in df_template.columns or den_col not in df_template.columns:
@@ -6802,6 +6873,38 @@ with tab_plan:
                             df_rows_show["budget_share_segment_pct"] = df_rows_show["budget_share_segment_pct"].map(
                                 lambda x: "" if pd.isna(x) else f"{x:.2f} %"
                             )
+                            if "shipped_orders" in df_rows_show.columns:
+                                df_rows_show["shipped_orders"] = df_rows_show["shipped_orders"].map(
+                                    lambda x: "" if pd.isna(x) else f"{round(x):,}".replace(",", " ")
+                                )
+                            if "shipped_cps" in df_rows_show.columns:
+                                df_rows_show["shipped_cps"] = df_rows_show["shipped_cps"].map(
+                                    lambda x: "" if pd.isna(x) else f"{round(x):,} ₽".replace(",", " ")
+                                )
+                            if "shipped_aov" in df_rows_show.columns:
+                                df_rows_show["shipped_aov"] = df_rows_show["shipped_aov"].map(
+                                    lambda x: "" if pd.isna(x) else f"{round(x):,} ₽".replace(",", " ")
+                                )
+                            if "shipped_revenue" in df_rows_show.columns:
+                                df_rows_show["shipped_revenue"] = df_rows_show["shipped_revenue"].map(
+                                    lambda x: "" if pd.isna(x) else f"{round(x):,} ₽".replace(",", " ")
+                                )
+                            if "shipped_roas" in df_rows_show.columns:
+                                df_rows_show["shipped_roas"] = df_rows_show["shipped_roas"].map(
+                                    lambda x: "" if pd.isna(x) else f"{x:.2f}"
+                                )
+                            if "shipped_drr_pct" in df_rows_show.columns:
+                                df_rows_show["shipped_drr_pct"] = df_rows_show["shipped_drr_pct"].map(
+                                    lambda x: "" if pd.isna(x) else f"{x:.2f} %"
+                                )
+                            if "shipped_order_share_segment_pct" in df_rows_show.columns:
+                                df_rows_show["shipped_order_share_segment_pct"] = df_rows_show["shipped_order_share_segment_pct"].map(
+                                    lambda x: "" if pd.isna(x) else f"{x:.2f} %"
+                                )
+                            if "shipped_revenue_share_segment_pct" in df_rows_show.columns:
+                                df_rows_show["shipped_revenue_share_segment_pct"] = df_rows_show["shipped_revenue_share_segment_pct"].map(
+                                    lambda x: "" if pd.isna(x) else f"{x:.2f} %"
+                                )
 
                         if is_real_estate_preset:
                             month_show_cols = ["campaign_type", "system", "format", "geo"] + get_real_estate_table_cols(metric_mode)
@@ -6898,6 +7001,22 @@ with tab_plan:
                             total_month_show["order_share_segment_pct"] = total_month_show["order_share_segment_pct"].map(lambda x: f"{x:.2f} %")
                             total_month_show["revenue_share_segment_pct"] = total_month_show["revenue_share_segment_pct"].map(lambda x: f"{x:.2f} %")
                             total_month_show["budget_share_segment_pct"] = total_month_show["budget_share_segment_pct"].map(lambda x: f"{x:.2f} %")
+                            if "shipped_orders" in total_month_show.columns:
+                                total_month_show["shipped_orders"] = total_month_show["shipped_orders"].map(lambda x: f"{round(x):,}".replace(",", " "))
+                            if "shipped_cps" in total_month_show.columns:
+                                total_month_show["shipped_cps"] = total_month_show["shipped_cps"].map(lambda x: f"{round(x):,} ₽".replace(",", " "))
+                            if "shipped_aov" in total_month_show.columns:
+                                total_month_show["shipped_aov"] = total_month_show["shipped_aov"].map(lambda x: f"{round(x):,} ₽".replace(",", " "))
+                            if "shipped_revenue" in total_month_show.columns:
+                                total_month_show["shipped_revenue"] = total_month_show["shipped_revenue"].map(lambda x: f"{round(x):,} ₽".replace(",", " "))
+                            if "shipped_roas" in total_month_show.columns:
+                                total_month_show["shipped_roas"] = total_month_show["shipped_roas"].map(lambda x: f"{x:.2f}")
+                            if "shipped_drr_pct" in total_month_show.columns:
+                                total_month_show["shipped_drr_pct"] = total_month_show["shipped_drr_pct"].map(lambda x: f"{x:.2f} %")
+                            if "shipped_order_share_segment_pct" in total_month_show.columns:
+                                total_month_show["shipped_order_share_segment_pct"] = total_month_show["shipped_order_share_segment_pct"].map(lambda x: f"{x:.2f} %")
+                            if "shipped_revenue_share_segment_pct" in total_month_show.columns:
+                                total_month_show["shipped_revenue_share_segment_pct"] = total_month_show["shipped_revenue_share_segment_pct"].map(lambda x: f"{x:.2f} %")
                         if is_real_estate_preset:
                             total_month_cols = ["campaign_type", "system", "format", "geo"] + get_real_estate_table_cols(metric_mode)
                         elif is_diy_preset:
@@ -7160,14 +7279,22 @@ with tab_plan:
                 agg["returned_clients"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["returned_clients"].sum().values if "returned_clients" in df_all.columns else 0.0
                 agg["new_clients"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["new_clients"].sum().values if "new_clients" in df_all.columns else 0.0
                 agg["order_frequency"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["order_frequency"].mean().values if "order_frequency" in df_all.columns else 0.0
+                agg["shipped_orders"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["shipped_orders"].sum().values if "shipped_orders" in df_all.columns else 0.0
+                agg["shipped_revenue"] = df_all.groupby(["planning_slot", "month_num", "month_year", "month_name"])["shipped_revenue"].sum().values if "shipped_revenue" in df_all.columns else 0.0
                 agg["sov_pct"] = np.where(agg["available_capacity"] > 0, agg["reach"] / agg["available_capacity"] * 100.0, 0.0)
                 agg["new_clients_share_pct"] = np.where(
                     agg["client_count"] > 0,
                     agg["new_clients"] / agg["client_count"] * 100.0,
                     0.0,
                 )
-                agg["order_share_segment_pct"] = 0.0
-                agg["revenue_share_segment_pct"] = 0.0
+                agg["cac"] = np.where(
+                    agg["new_clients"] > 0,
+                    agg["cost_with_vat_ak"] / agg["new_clients"],
+                    0.0,
+                )
+                agg["order_share_segment_pct"] = 100.0
+                agg["revenue_share_segment_pct"] = 100.0
+                agg["budget_share_segment_pct"] = 100.0
             if use_ak_budget_metrics:
                 budget_series = agg["cost_with_vat_ak"] if use_vat_budget_metrics else (agg["cost"] + agg["ak_cost_wo_vat"])
             else:
@@ -7237,6 +7364,29 @@ with tab_plan:
             )
             agg["ctr_pct"] = agg["ctr"]
             agg["cr_pct"] = agg["cr"]
+            if is_diy_preset:
+                agg["shipped_cps"] = np.where(
+                    agg["shipped_orders"] > 0,
+                    agg["cost_with_vat"] / agg["shipped_orders"],
+                    0.0,
+                )
+                agg["shipped_aov"] = np.where(
+                    agg["shipped_orders"] > 0,
+                    agg["shipped_revenue"] / agg["shipped_orders"],
+                    0.0,
+                )
+                agg["shipped_roas"] = np.where(
+                    budget_series > 0,
+                    agg["shipped_revenue"] / budget_series,
+                    0.0,
+                )
+                agg["shipped_drr_pct"] = np.where(
+                    agg["shipped_revenue"] > 0,
+                    budget_series / agg["shipped_revenue"] * 100.0,
+                    0.0,
+                )
+                agg["shipped_order_share_segment_pct"] = 100.0
+                agg["shipped_revenue_share_segment_pct"] = 100.0
 
             total_row = {
                 "planning_slot": 999,
@@ -7309,9 +7459,17 @@ with tab_plan:
                 total_row["returned_clients"] = float(agg["returned_clients"].sum()) if "returned_clients" in agg.columns else 0.0
                 total_row["new_clients"] = float(agg["new_clients"].sum()) if "new_clients" in agg.columns else 0.0
                 total_row["order_frequency"] = float(agg["order_frequency"].mean()) if "order_frequency" in agg.columns else 0.0
+                total_row["shipped_orders"] = float(agg["shipped_orders"].sum()) if "shipped_orders" in agg.columns else 0.0
+                total_row["shipped_revenue"] = float(agg["shipped_revenue"].sum()) if "shipped_revenue" in agg.columns else 0.0
+                total_row["shipped_cps"] = (total_row["cost_with_vat"] / float(total_row["shipped_orders"])) if float(total_row["shipped_orders"]) > 0 else 0.0
+                total_row["shipped_aov"] = (float(total_row["shipped_revenue"]) / float(total_row["shipped_orders"])) if float(total_row["shipped_orders"]) > 0 else 0.0
+                total_row["shipped_roas"] = (float(total_row["shipped_revenue"]) / total_budget_basis) if total_budget_basis > 0 else 0.0
+                total_row["shipped_drr_pct"] = (total_budget_basis / float(total_row["shipped_revenue"]) * 100.0) if float(total_row["shipped_revenue"]) > 0 else 0.0
                 total_row["sov_pct"] = (total_row["reach"] / total_row["available_capacity"] * 100.0) if total_row["available_capacity"] > 0 else 0.0
                 total_row["new_clients_share_pct"] = calc_new_clients_share_pct(total_row["new_clients"], total_row["client_count"])
                 total_row["cac"] = (total_row["cost_with_vat_ak"] / float(total_row["new_clients"])) if float(total_row["new_clients"]) > 0 else 0.0
+                total_row["shipped_order_share_segment_pct"] = 100.0
+                total_row["shipped_revenue_share_segment_pct"] = 100.0
                 total_row["order_share_segment_pct"] = 100.0
                 total_row["revenue_share_segment_pct"] = 100.0
 
@@ -7368,9 +7526,17 @@ with tab_plan:
                         seg_row["returned_clients"] = float(seg_df["returned_clients"].sum()) if "returned_clients" in seg_df.columns else 0.0
                         seg_row["new_clients"] = float(seg_df["new_clients"].sum()) if "new_clients" in seg_df.columns else 0.0
                         seg_row["order_frequency"] = float(seg_df["order_frequency"].mean()) if "order_frequency" in seg_df.columns else 0.0
+                        seg_row["shipped_orders"] = float(seg_df["shipped_orders"].sum()) if "shipped_orders" in seg_df.columns else 0.0
+                        seg_row["shipped_revenue"] = float(seg_df["shipped_revenue"].sum()) if "shipped_revenue" in seg_df.columns else 0.0
+                        seg_row["shipped_cps"] = (seg_row["cost_with_vat"] / float(seg_row["shipped_orders"])) if float(seg_row["shipped_orders"]) > 0 else 0.0
+                        seg_row["shipped_aov"] = (float(seg_row["shipped_revenue"]) / float(seg_row["shipped_orders"])) if float(seg_row["shipped_orders"]) > 0 else 0.0
+                        seg_row["shipped_roas"] = (float(seg_row["shipped_revenue"]) / seg_budget_basis) if seg_budget_basis > 0 else 0.0
+                        seg_row["shipped_drr_pct"] = (seg_budget_basis / float(seg_row["shipped_revenue"]) * 100.0) if float(seg_row["shipped_revenue"]) > 0 else 0.0
                         seg_row["sov_pct"] = (seg_row["reach"] / seg_row["available_capacity"] * 100.0) if seg_row["available_capacity"] > 0 else 0.0
                         seg_row["new_clients_share_pct"] = calc_new_clients_share_pct(seg_row["new_clients"], seg_row["client_count"])
                         seg_row["cac"] = (seg_row["cost_with_vat_ak"] / float(seg_row["new_clients"])) if float(seg_row["new_clients"]) > 0 else 0.0
+                        seg_row["shipped_order_share_segment_pct"] = 100.0
+                        seg_row["shipped_revenue_share_segment_pct"] = 100.0
                         seg_row["order_share_segment_pct"] = 100.0
                         seg_row["revenue_share_segment_pct"] = 100.0
                     segment_total_rows.append(seg_row)
@@ -7400,6 +7566,7 @@ with tab_plan:
                     "vat_amount",
                     "ak_rate_pct",
                     "cr",
+                    "cr2_pct",
                     "conversions",
                     "cpa",
                     "aov",
@@ -8684,6 +8851,7 @@ with tab_export:
                     if c not in fact.columns:
                         fact[c] = np.nan
                 fact = fact[fact_cols].copy()
+                fact = normalize_entity_columns(fact, ["impressions"])
 
                 dim_segment = (
                     bi_export_df[["segment"]]
@@ -8793,6 +8961,7 @@ with tab_export:
                             "budget_share_segment_pct": "Доля рекламного бюджета, %",
                         }
                     )
+                    df_detail = normalize_entity_columns(df_detail, ["Показы"])
                     if "ROAS" in df_detail.columns:
                         df_detail["ROAS"] = pd.to_numeric(df_detail["ROAS"], errors="coerce").round(2)
                     df_detail.to_excel(writer, sheet_name="Детально", index=False)
@@ -8853,6 +9022,7 @@ with tab_export:
                             "drr_pct": "ДРР, %",
                         }
                     )
+                    agg_month = normalize_entity_columns(agg_month, ["impressions"])
                     if "ROAS" in agg_month.columns:
                         agg_month["ROAS"] = pd.to_numeric(agg_month["ROAS"], errors="coerce").round(2)
                     agg_month.to_excel(writer, sheet_name="Сводка_по_месяцам", index=False)
@@ -8891,6 +9061,11 @@ with tab_export:
                     df_export=df_export,
                     campaigns_export=template_campaigns_raw,
                     collapse_geo_to_rf=collapse_geo_template_export,
+                )
+                template_df_export_rf, template_campaigns_rf = build_template_export_payload(
+                    df_export=df_export,
+                    campaigns_export=template_campaigns_raw,
+                    collapse_geo_to_rf=True,
                 )
 
                 if collapse_geo_template_export:
@@ -8953,6 +9128,9 @@ with tab_export:
                                 campaigns=template_campaigns,
                                 selected_periods=template_periods,
                                 template_kind="diy_client",
+                                use_rf_periods_sheet=collapse_geo_template_export,
+                                rf_df_all=None if collapse_geo_template_export else template_df_export_rf,
+                                rf_campaigns=None if collapse_geo_template_export else template_campaigns_rf,
                             )
                             st.download_button(
                                 "Скачать Excel по шаблону DIY клиентский",
