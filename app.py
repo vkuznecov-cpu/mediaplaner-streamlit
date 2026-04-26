@@ -1120,9 +1120,26 @@ def _bootstrap_reference_from_campaigns(campaigns_df: pd.DataFrame | None) -> No
         if metric_mode.get("is_diy"):
             shipped_orders = float(out.get("target_leads", 0.0) or 0.0)
             shipped_aov = max(0.0, parse_float_loose(row.get("shipped_aov_avg"), 0.0))
+            client_count = round_entity_count(parse_float_loose(row.get("client_count_avg"), 0.0))
+            absolute_new_clients = round_entity_count(parse_float_loose(row.get("absolute_new_clients_avg"), 0.0))
+            returned_clients = round_entity_count(parse_float_loose(row.get("returned_clients_avg"), 0.0))
+            new_clients = absolute_new_clients + returned_clients
+            available_capacity = parse_float_loose(row.get("available_capacity_avg"), 0.0)
             out["shipped_orders"] = shipped_orders
             out["shipped_revenue"] = shipped_orders * shipped_aov
             out["shipped_aov"] = shipped_aov
+            out["shipped_cps"] = (out.get("cost_with_vat_ak", 0.0) / shipped_orders) if shipped_orders > 0 else 0.0
+            out["shipped_roas"] = (out["shipped_revenue"] / out.get("cost_with_vat_ak", 0.0)) if out.get("cost_with_vat_ak", 0.0) > 0 else 0.0
+            out["shipped_drr"] = (out.get("cost_with_vat_ak", 0.0) / out["shipped_revenue"] * 100.0) if out["shipped_revenue"] > 0 else 0.0
+            out["client_count"] = client_count
+            out["absolute_new_clients"] = absolute_new_clients
+            out["returned_clients"] = returned_clients
+            out["new_clients"] = new_clients
+            out["new_clients_share"] = (new_clients / client_count * 100.0) if client_count > 0 else 0.0
+            out["order_frequency"] = parse_float_loose(row.get("order_frequency_avg"), 0.0)
+            out["available_capacity"] = available_capacity
+            out["sov"] = (client_count / available_capacity * 100.0) if available_capacity > 0 else 0.0
+            out["cac"] = (out.get("cost_with_vat_ak", 0.0) / new_clients) if new_clients > 0 else 0.0
         camp = str(row.get("campaign_type", "")).strip()
         if not camp:
             continue
@@ -1161,6 +1178,28 @@ def _bootstrap_reference_from_campaigns(campaigns_df: pd.DataFrame | None) -> No
             "roas": roas,
             "drr": drr,
         }
+        if metric_mode.get("is_diy"):
+            base_by_campaign[camp].update(
+                {
+                    "aov": float(inp.aov),
+                    "cr2": float((shipped_orders / conv * 100.0) if conv > 0 else 0.0),
+                    "shipped_orders": float(out.get("shipped_orders", 0.0)),
+                    "shipped_cps": float(out.get("shipped_cps", 0.0)),
+                    "shipped_aov": float(out.get("shipped_aov", 0.0)),
+                    "shipped_revenue": float(out.get("shipped_revenue", 0.0)),
+                    "shipped_roas": float(out.get("shipped_roas", 0.0)),
+                    "shipped_drr": float(out.get("shipped_drr", 0.0)),
+                    "client_count": float(out.get("client_count", 0.0)),
+                    "absolute_new_clients": float(out.get("absolute_new_clients", 0.0)),
+                    "returned_clients": float(out.get("returned_clients", 0.0)),
+                    "new_clients": float(out.get("new_clients", 0.0)),
+                    "new_clients_share": float(out.get("new_clients_share", 0.0)),
+                    "order_frequency": float(out.get("order_frequency", 0.0)),
+                    "available_capacity": float(out.get("available_capacity", 0.0)),
+                    "sov": float(out.get("sov", 0.0)),
+                    "cac": float(out.get("cac", 0.0)),
+                }
+            )
 
         total_imp += imp
         total_clicks += clicks
@@ -1189,6 +1228,36 @@ def _bootstrap_reference_from_campaigns(campaigns_df: pd.DataFrame | None) -> No
         "roas": float((total_rev / total_budget_basis) if total_budget_basis > 0 else 0.0),
         "drr": float((total_budget_basis / total_rev * 100.0) if total_rev > 0 else 0.0),
     }
+    if metric_mode.get("is_diy"):
+        diy_vals = list(base_by_campaign.values())
+        total_shipped_orders = float(sum(v.get("shipped_orders", 0.0) for v in diy_vals))
+        total_shipped_revenue = float(sum(v.get("shipped_revenue", 0.0) for v in diy_vals))
+        total_client_count = float(sum(v.get("client_count", 0.0) for v in diy_vals))
+        total_absolute_new_clients = float(sum(v.get("absolute_new_clients", 0.0) for v in diy_vals))
+        total_returned_clients = float(sum(v.get("returned_clients", 0.0) for v in diy_vals))
+        total_new_clients = total_absolute_new_clients + total_returned_clients
+        total_available_capacity = float(sum(v.get("available_capacity", 0.0) for v in diy_vals))
+        st.session_state["mp_ref_base"].update(
+            {
+                "aov": float((total_rev / total_conv) if total_conv > 0 else 0.0),
+                "cr2": float((total_shipped_orders / total_conv * 100.0) if total_conv > 0 else 0.0),
+                "shipped_orders": total_shipped_orders,
+                "shipped_cps": float((total_budget_basis / total_shipped_orders) if total_shipped_orders > 0 else 0.0),
+                "shipped_aov": float((total_shipped_revenue / total_shipped_orders) if total_shipped_orders > 0 else 0.0),
+                "shipped_revenue": total_shipped_revenue,
+                "shipped_roas": float((total_shipped_revenue / total_budget_basis) if total_budget_basis > 0 else 0.0),
+                "shipped_drr": float((total_budget_basis / total_shipped_revenue * 100.0) if total_shipped_revenue > 0 else 0.0),
+                "client_count": total_client_count,
+                "absolute_new_clients": total_absolute_new_clients,
+                "returned_clients": total_returned_clients,
+                "new_clients": total_new_clients,
+                "new_clients_share": float((total_new_clients / total_client_count * 100.0) if total_client_count > 0 else 0.0),
+                "order_frequency": float(sum(v.get("order_frequency", 0.0) for v in diy_vals) / len(diy_vals)) if diy_vals else 0.0,
+                "available_capacity": total_available_capacity,
+                "sov": float((total_client_count / total_available_capacity * 100.0) if total_available_capacity > 0 else 0.0),
+                "cac": float((total_budget_basis / total_new_clients) if total_new_clients > 0 else 0.0),
+            }
+        )
 
 
 def export_project_state_payload() -> dict:
@@ -1231,6 +1300,11 @@ def export_project_state_payload() -> dict:
             "planning_start_year": int(st.session_state.get("planning_start_year", dt.date.today().year) or dt.date.today().year),
             "metric_preset_key": str(st.session_state.get("metric_preset_key", "ecom")),
             "real_estate_funnel_mode": str(st.session_state.get("real_estate_funnel_mode", "simple")),
+            "avg_month_coeffs": {
+                key: _df_to_payload(value)
+                for key, value in st.session_state.items()
+                if str(key).startswith("avg_month_coeffs_") and isinstance(value, pd.DataFrame)
+            },
         },
     }
     return payload
@@ -1281,6 +1355,13 @@ def import_project_state_payload(payload: dict) -> tuple[bool, str]:
     preset_key = str(state.get("metric_preset_key", "ecom"))
     st.session_state["metric_preset_key"] = preset_key if preset_key in METRIC_PRESETS else "ecom"
     st.session_state["real_estate_funnel_mode"] = str(state.get("real_estate_funnel_mode", "simple"))
+    for preset_name in METRIC_PRESETS:
+        st.session_state.pop(f"avg_month_coeffs_{preset_name}", None)
+    avg_month_coeffs_payload = state.get("avg_month_coeffs", {})
+    if isinstance(avg_month_coeffs_payload, dict):
+        for key, value in avg_month_coeffs_payload.items():
+            if str(key).startswith("avg_month_coeffs_"):
+                st.session_state[str(key)] = _df_from_payload(value)
     _bootstrap_reference_from_campaigns(st.session_state.get("campaigns_df"))
 
     return True, "Данные проекта импортированы."
@@ -2896,6 +2977,162 @@ def normalize_selected_periods_for_template(selected_periods: list[dict]) -> lis
     return normalized
 
 
+AVG_MONTH_COEFF_LABELS = {
+    "k_imp": "k_imp",
+    "k_ctr": "k_ctr",
+    "k_cpc": "k_cpc",
+    "k_cr": "k_cr",
+    "k_cr2": "k_cr2",
+    "k_aov": "k_aov",
+    "k_shipped_aov": "k_shipped_aov",
+    "k_capacity": "k_capacity",
+    "k_client_count": "k_client_count",
+    "k_absolute_new_clients": "k_absolute_new_clients",
+    "k_returned_clients": "k_returned_clients",
+    "k_order_frequency": "k_order_frequency",
+}
+
+
+def get_avg_month_coeff_specs(
+    preset_key: str,
+    metric_mode: dict | None,
+    campaigns_df: pd.DataFrame | None,
+) -> list[tuple[str, list[str]]]:
+    metric_mode = metric_mode or {}
+    cols = set(campaigns_df.columns) if campaigns_df is not None else set()
+    specs: list[tuple[str, list[str]]] = [
+        ("k_imp", ["impressions_avg"]),
+        ("k_ctr", ["ctr_avg_percent"]),
+        ("k_cpc", ["cpc_avg"]),
+        ("k_cr", ["cr_avg_percent"]),
+    ]
+    if preset_key == "diy":
+        specs += [
+            ("k_aov", ["aov_avg"]),
+            ("k_shipped_aov", ["shipped_aov_avg"]),
+            ("k_cr2", ["cr2_avg_percent"]),
+            ("k_capacity", ["available_capacity_avg"]),
+            ("k_client_count", ["client_count_avg"]),
+            ("k_absolute_new_clients", ["absolute_new_clients_avg"]),
+            ("k_returned_clients", ["returned_clients_avg"]),
+            ("k_order_frequency", ["order_frequency_avg"]),
+        ]
+    elif preset_key == "ecom":
+        specs += [("k_aov", ["aov_avg"])]
+    elif preset_key == "real_estate":
+        if metric_mode.get("is_real_estate_full"):
+            specs += [("k_cr2", ["cr2_avg_percent"])]
+    filtered_specs = []
+    for coeff_col, target_fields in specs:
+        existing_targets = [f for f in target_fields if f in cols]
+        if existing_targets:
+            filtered_specs.append((coeff_col, existing_targets))
+    return filtered_specs
+
+
+def ensure_avg_month_coeffs_state(
+    preset_key: str,
+    metric_mode: dict | None,
+    campaigns_df: pd.DataFrame | None,
+) -> tuple[str, list[str]]:
+    coeff_specs = get_avg_month_coeff_specs(preset_key, metric_mode, campaigns_df)
+    coeff_fields = [col for col, _ in coeff_specs]
+    state_key = f"avg_month_coeffs_{preset_key}"
+    current = st.session_state.get(state_key)
+    if campaigns_df is None or campaigns_df.empty:
+        st.session_state[state_key] = pd.DataFrame()
+        return state_key, coeff_fields
+    identity_cols = ["campaign_key", "campaign_type", "geo", "segment"]
+    base_df = campaigns_df.copy()
+    if "campaign_key" not in base_df.columns:
+        base_df["campaign_key"] = base_df.apply(get_campaign_identity_key_from_row, axis=1)
+    for col in ["campaign_type", "geo", "segment"]:
+        if col not in base_df.columns:
+            base_df[col] = ""
+    template_df = base_df[identity_cols].copy()
+    template_df["geo"] = template_df["geo"].fillna("").astype(str)
+    template_df["segment"] = template_df["segment"].fillna("").astype(str).str.upper()
+    template_df["campaign_type"] = template_df["campaign_type"].fillna("").astype(str)
+    template_df["campaign_key"] = template_df["campaign_key"].fillna("").astype(str)
+    template_df = template_df.drop_duplicates(subset=["campaign_key"], keep="first").reset_index(drop=True)
+    for coeff_col in coeff_fields:
+        template_df[coeff_col] = 1.0
+    if not isinstance(current, pd.DataFrame):
+        current = template_df.copy()
+    else:
+        current = current.copy()
+        if "campaign_key" not in current.columns:
+            current["campaign_key"] = current.apply(get_campaign_identity_key_from_row, axis=1)
+        for col in ["campaign_type", "geo", "segment"]:
+            if col not in current.columns:
+                current[col] = ""
+        current["campaign_key"] = current["campaign_key"].fillna("").astype(str)
+        current["campaign_type"] = current["campaign_type"].fillna("").astype(str)
+        current["geo"] = current["geo"].fillna("").astype(str)
+        current["segment"] = current["segment"].fillna("").astype(str).str.upper()
+        for coeff_col in coeff_fields:
+            if coeff_col not in current.columns:
+                current[coeff_col] = 1.0
+        keep_cols = identity_cols + coeff_fields
+        current = current[keep_cols].drop_duplicates(subset=["campaign_key"], keep="first")
+        template_df = template_df.merge(
+            current[["campaign_key"] + coeff_fields],
+            on="campaign_key",
+            how="left",
+            suffixes=("", "_loaded"),
+        )
+        for coeff_col in coeff_fields:
+            loaded_col = f"{coeff_col}_loaded"
+            if loaded_col in template_df.columns:
+                template_df[coeff_col] = pd.to_numeric(template_df[loaded_col], errors="coerce").fillna(template_df[coeff_col])
+                template_df = template_df.drop(columns=[loaded_col])
+        current = template_df
+    for coeff_col in coeff_fields:
+        current[coeff_col] = pd.to_numeric(current[coeff_col], errors="coerce").fillna(1.0)
+    st.session_state[state_key] = current
+    return state_key, coeff_fields
+
+
+def get_avg_month_coeff_map(state_key: str, coeff_fields: list[str]) -> dict[str, dict[str, float]]:
+    df = st.session_state.get(state_key)
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return {}
+    work = df.copy()
+    if "campaign_key" not in work.columns:
+        return {}
+    work["campaign_key"] = work["campaign_key"].astype(str)
+    out = {}
+    for _, row in work.iterrows():
+        out[row["campaign_key"]] = {
+            coeff_col: float(pd.to_numeric(row.get(coeff_col, 1.0), errors="coerce") or 1.0)
+            for coeff_col in coeff_fields
+        }
+    return out
+
+
+def apply_avg_month_coeffs_to_campaigns(
+    campaigns_df: pd.DataFrame,
+    coeff_map: dict[str, dict[str, float]],
+    coeff_specs: list[tuple[str, list[str]]],
+) -> pd.DataFrame:
+    out = campaigns_df.copy()
+    if out.empty:
+        return out
+    if "campaign_key" not in out.columns:
+        out["campaign_key"] = out.apply(get_campaign_identity_key_from_row, axis=1)
+    for coeff_col, target_fields in coeff_specs:
+        coeff_series = out["campaign_key"].map(
+            lambda key: float(coeff_map.get(str(key), {}).get(coeff_col, 1.0) or 1.0)
+        )
+        for field in target_fields:
+            if field not in out.columns:
+                continue
+            out[field] = pd.to_numeric(out[field], errors="coerce").fillna(0.0) * coeff_series
+            if field in {"impressions_avg", "client_count_avg", "absolute_new_clients_avg", "returned_clients_avg"}:
+                out[field] = out[field].map(round_entity_count)
+    return out
+
+
 # ---------- ЗАГОЛОВОК  ТАБЫ ----------
 
 coeff_header_uri = image_file_to_data_uri(os.path.join(BASE_DIR, "assets", "coeff_header_mascot.png"))
@@ -3879,6 +4116,39 @@ with tab_setup:
                     {"Показатель": "ЦО", "Значение": _fmt_ref_int(ref.get("target_leads", ref.get("conversions", 0.0)))},
                     {"Показатель": "CPQL", "Значение": _fmt_ref_rub(ref.get("cpql", ref.get("cpo", 0.0)))},
                 ]
+        elif is_diy_preset:
+            rows = [
+                {"Показатель": "Показы", "Значение": _fmt_ref_int(ref.get("impressions", 0.0))},
+                {"Показатель": "Клики", "Значение": _fmt_ref_int(ref.get("clicks", 0.0))},
+                {"Показатель": "Конверсии", "Значение": _fmt_ref_int(ref.get("conversions", 0.0))},
+                {"Показатель": "Бюджет", "Значение": _fmt_ref_rub(ref.get("cost", 0.0))},
+                {"Показатель": "Бюджет с НДС", "Значение": _fmt_ref_rub(ref.get("cost_with_vat", 0.0))},
+                {"Показатель": "Бюджет с НДС и АК", "Значение": _fmt_ref_rub(ref.get("cost_with_vat_ak", 0.0))},
+                {"Показатель": "Доход", "Значение": _fmt_ref_rub(ref.get("revenue", 0.0))},
+                {"Показатель": "CTR", "Значение": _fmt_ref_pct(ref.get("ctr", 0.0))},
+                {"Показатель": "CPC", "Значение": _fmt_ref_rub2(ref.get("cpc", 0.0))},
+                {"Показатель": "CR", "Значение": _fmt_ref_pct(ref.get("cr", 0.0))},
+                {"Показатель": "CPO", "Значение": _fmt_ref_rub(ref.get("cpo", 0.0))},
+                {"Показатель": "Средний чек", "Значение": _fmt_ref_rub(ref.get("aov", 0.0))},
+                {"Показатель": "ROAS", "Значение": _fmt_ref_roas(ref.get("roas", 0.0))},
+                {"Показатель": "ДРР", "Значение": _fmt_ref_pct(ref.get("drr", 0.0))},
+                {"Показатель": "CR2", "Значение": _fmt_ref_pct(ref.get("cr2", 0.0))},
+                {"Показатель": "Отгр. заказы", "Значение": _fmt_ref_int(ref.get("shipped_orders", 0.0))},
+                {"Показатель": "Стоимость отгр. заказа", "Значение": _fmt_ref_rub(ref.get("shipped_cps", 0.0))},
+                {"Показатель": "Средний чек отгр.", "Значение": _fmt_ref_rub(ref.get("shipped_aov", 0.0))},
+                {"Показатель": "Выручка отгр.", "Значение": _fmt_ref_rub(ref.get("shipped_revenue", 0.0))},
+                {"Показатель": "ROAS отгр.", "Значение": _fmt_ref_roas(ref.get("shipped_roas", 0.0))},
+                {"Показатель": "ДРР отгр.", "Значение": _fmt_ref_pct(ref.get("shipped_drr", 0.0))},
+                {"Показатель": "Кол-во клиентов", "Значение": _fmt_ref_int(ref.get("client_count", 0.0))},
+                {"Показатель": "Абсолютно новые", "Значение": _fmt_ref_int(ref.get("absolute_new_clients", 0.0))},
+                {"Показатель": "Вернувшиеся", "Значение": _fmt_ref_int(ref.get("returned_clients", 0.0))},
+                {"Показатель": "Новые клиенты", "Значение": _fmt_ref_int(ref.get("new_clients", 0.0))},
+                {"Показатель": "Доля новых клиентов", "Значение": _fmt_ref_pct(ref.get("new_clients_share", 0.0))},
+                {"Показатель": "Частота заказа", "Значение": f"{float(ref.get('order_frequency', 0.0)):.2f}"},
+                {"Показатель": "Доступная емкость", "Значение": _fmt_ref_int(ref.get("available_capacity", 0.0))},
+                {"Показатель": "SOV", "Значение": _fmt_ref_pct(ref.get("sov", 0.0))},
+                {"Показатель": "CAC", "Значение": _fmt_ref_rub(ref.get("cac", 0.0))},
+            ]
         else:
             rows = [
                 {"Показатель": "Показы", "Значение": _fmt_ref_int(ref.get("impressions", 0.0))},
@@ -4254,19 +4524,13 @@ with tab_setup:
             plan_calc_blockers.append("не заполнены обязательные поля в таблице РК")
 
         segment_filter_options = ["Все", "B2B", "B2C"]
+        campaigns_all_for_avg_month = campaigns.copy()
         if "plan_segment_filter" not in st.session_state:
             st.session_state["plan_segment_filter"] = "Все"
         if "plan_segment_filter_top" not in st.session_state:
             st.session_state["plan_segment_filter_top"] = st.session_state["plan_segment_filter"]
         if "plan_segment_filter_sidebar" not in st.session_state:
             st.session_state["plan_segment_filter_sidebar"] = st.session_state["plan_segment_filter"]
-
-        def _sync_segment_from_top():
-            val = str(st.session_state.get("plan_segment_filter_top", "Все"))
-            if val not in segment_filter_options:
-                val = "Все"
-            st.session_state["plan_segment_filter"] = val
-            st.session_state["plan_segment_filter_sidebar"] = val
 
         def _sync_segment_from_sidebar():
             val = str(st.session_state.get("plan_segment_filter_sidebar", "Все"))
@@ -4276,13 +4540,7 @@ with tab_setup:
             st.session_state["plan_segment_filter_top"] = val
 
         if is_diy_preset:
-            st.radio(
-                "Показывать кампании сегмента:",
-                options=segment_filter_options,
-                horizontal=True,
-                key="plan_segment_filter_top",
-                on_change=_sync_segment_from_top,
-            )
+            st.session_state["plan_segment_filter_top"] = st.session_state.get("plan_segment_filter", "Все")
             segment_filter = str(st.session_state.get("plan_segment_filter", "Все"))
             if segment_filter != "Все":
                 campaigns = campaigns[campaigns["segment"].astype(str).str.upper() == segment_filter]
@@ -5335,8 +5593,17 @@ with tab_setup:
     # чтобы исключить рассинхрон с data_editor.
     ak_rules_df = st.session_state.get("ak_rules_df", ak_rules_df)
 
+    avg_month_coeffs_state_key, avg_month_coeff_fields = ensure_avg_month_coeffs_state(
+        active_preset_key,
+        metric_mode,
+        campaigns_all_for_avg_month,
+    )
+    avg_month_coeff_specs = get_avg_month_coeff_specs(active_preset_key, metric_mode, campaigns_all_for_avg_month)
+    avg_month_coeff_map = get_avg_month_coeff_map(avg_month_coeffs_state_key, avg_month_coeff_fields)
+    campaigns_calc = apply_avg_month_coeffs_to_campaigns(campaigns, avg_month_coeff_map, avg_month_coeff_specs)
+
     base_rows = []
-    for _, base_row in campaigns.iterrows():
+    for _, base_row in campaigns_calc.iterrows():
         base = PlanInput(
             impressions=base_row["impressions_avg"],
             ctr=base_row["ctr_avg_percent"] / 100.0,
@@ -6040,12 +6307,133 @@ with tab_plan:
         """,
         unsafe_allow_html=True,
     )
-    ui_section_title("2. Средний месяц (базовые значения)")
+    avg_month_title_left, avg_month_title_right = st.columns([2.2, 1.0], vertical_alignment="bottom")
+    with avg_month_title_left:
+        st.markdown(
+            """
+            <div style="height: 42px; display: flex; align-items: flex-end; margin-bottom: 2px;">
+                <div class="ui-section-title" style="margin: 0;">2. Средний месяц (базовые значения)</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with avg_month_title_right:
+        st.markdown(
+            """
+            <div style="height: 42px; display: flex; align-items: flex-end; margin-bottom: 2px;">
+                <div class="ui-section-title" style="margin: 0;">Корректировка среднего месяца</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     if df_base.empty:
         st.info("Нет данных для среднего месяца.")
     else:
-        styled_base_plan = df_base_show.style.apply(highlight_total_row, axis=1)
-        st.dataframe(styled_base_plan, width="stretch")
+        avg_month_plan_left, avg_month_plan_right = st.columns([2.2, 1.0], vertical_alignment="top")
+        with avg_month_plan_right:
+            avg_month_coeffs_draft_key = f"{avg_month_coeffs_state_key}_draft"
+            avg_month_coeffs_applied_full_df = st.session_state.get(avg_month_coeffs_state_key, pd.DataFrame()).copy()
+            visible_campaign_keys = set(campaigns["campaign_key"].astype(str).tolist()) if "campaign_key" in campaigns.columns else set()
+            if isinstance(avg_month_coeffs_applied_full_df, pd.DataFrame) and not avg_month_coeffs_applied_full_df.empty and visible_campaign_keys:
+                avg_month_coeffs_applied_df = avg_month_coeffs_applied_full_df[
+                    avg_month_coeffs_applied_full_df["campaign_key"].astype(str).isin(visible_campaign_keys)
+                ].copy()
+            else:
+                avg_month_coeffs_applied_df = avg_month_coeffs_applied_full_df.copy()
+            avg_month_coeffs_draft_df = st.session_state.get(avg_month_coeffs_draft_key)
+            avg_month_identity_cols = ["campaign_key", "campaign_type", "geo", "segment"]
+            avg_month_compare_cols = avg_month_identity_cols + avg_month_coeff_fields
+            if not isinstance(avg_month_coeffs_draft_df, pd.DataFrame):
+                avg_month_coeffs_draft_df = avg_month_coeffs_applied_df.copy()
+            else:
+                avg_month_coeffs_draft_df = avg_month_coeffs_draft_df.copy()
+            draft_needs_reset = False
+            if avg_month_coeffs_applied_df.empty and not avg_month_coeffs_draft_df.empty:
+                draft_needs_reset = True
+            else:
+                for _col in avg_month_compare_cols:
+                    if _col not in avg_month_coeffs_draft_df.columns or _col not in avg_month_coeffs_applied_df.columns:
+                        draft_needs_reset = True
+                        break
+                if not draft_needs_reset:
+                    applied_sig = avg_month_coeffs_applied_df[avg_month_compare_cols].copy()
+                    draft_sig = avg_month_coeffs_draft_df[avg_month_compare_cols].copy()
+                    for _col in ["campaign_key", "campaign_type", "geo", "segment"]:
+                        applied_sig[_col] = applied_sig[_col].fillna("").astype(str)
+                        draft_sig[_col] = draft_sig[_col].fillna("").astype(str)
+                    if not applied_sig[avg_month_identity_cols].equals(draft_sig[avg_month_identity_cols]):
+                        draft_needs_reset = True
+            if draft_needs_reset:
+                avg_month_coeffs_draft_df = avg_month_coeffs_applied_df.copy()
+            st.session_state[avg_month_coeffs_draft_key] = avg_month_coeffs_draft_df
+            with st.form(key=f"{avg_month_coeffs_state_key}_form", clear_on_submit=False):
+                avg_month_coeffs_df = st.data_editor(
+                    st.session_state[avg_month_coeffs_draft_key],
+                    num_rows="fixed",
+                    width="stretch",
+                    hide_index=True,
+                    key=f"{avg_month_coeffs_draft_key}_editor",
+                    column_config={
+                        "campaign_key": None,
+                        "campaign_type": st.column_config.TextColumn("Тип РК / Название", disabled=True, width="medium"),
+                        "geo": st.column_config.TextColumn("ГЕО", disabled=True, width="small"),
+                        "segment": st.column_config.TextColumn("Сегмент", disabled=True, width="small"),
+                        "k_imp": st.column_config.NumberColumn("k_imp", format="%.2f", width="small"),
+                        "k_ctr": st.column_config.NumberColumn("k_ctr", format="%.2f", width="small"),
+                        "k_cpc": st.column_config.NumberColumn("k_cpc", format="%.2f", width="small"),
+                        "k_cr": st.column_config.NumberColumn("k_cr", format="%.2f", width="small"),
+                        "k_cr2": st.column_config.NumberColumn("k_cr2", format="%.2f", width="small"),
+                        "k_aov": st.column_config.NumberColumn("k_aov", format="%.2f", width="small"),
+                        "k_shipped_aov": st.column_config.NumberColumn("k_shipped_aov", format="%.2f", width="small"),
+                        "k_capacity": st.column_config.NumberColumn("k_capacity", format="%.2f", width="small"),
+                        "k_client_count": st.column_config.NumberColumn("k_client_count", format="%.2f", width="small"),
+                        "k_absolute_new_clients": st.column_config.NumberColumn("k_absolute_new_clients", format="%.2f", width="small"),
+                        "k_returned_clients": st.column_config.NumberColumn("k_returned_clients", format="%.2f", width="small"),
+                        "k_order_frequency": st.column_config.NumberColumn("k_order_frequency", format="%.2f", width="small"),
+                    },
+                )
+                avg_month_apply_col, avg_month_reset_col = st.columns([1.2, 1.0], vertical_alignment="center")
+                with avg_month_apply_col:
+                    apply_avg_month_coeffs = st.form_submit_button("Применить", width="stretch")
+                with avg_month_reset_col:
+                    reset_avg_month_coeffs = st.form_submit_button("Сбросить", width="stretch")
+            avg_month_coeffs_df = avg_month_coeffs_df.copy()
+            if "campaign_key" in avg_month_coeffs_df.columns:
+                avg_month_coeffs_df["campaign_key"] = avg_month_coeffs_df["campaign_key"].astype(str)
+            for coeff_col in avg_month_coeff_fields:
+                if coeff_col in avg_month_coeffs_df.columns:
+                    avg_month_coeffs_df[coeff_col] = pd.to_numeric(avg_month_coeffs_df[coeff_col], errors="coerce").fillna(1.0)
+            if apply_avg_month_coeffs:
+                st.session_state[avg_month_coeffs_draft_key] = avg_month_coeffs_df
+                applied_full_df = avg_month_coeffs_applied_full_df.copy()
+                if not isinstance(applied_full_df, pd.DataFrame) or applied_full_df.empty:
+                    applied_full_df = avg_month_coeffs_df.copy()
+                else:
+                    if "campaign_key" in applied_full_df.columns:
+                        applied_full_df["campaign_key"] = applied_full_df["campaign_key"].astype(str)
+                    draft_by_key = avg_month_coeffs_df.set_index("campaign_key")
+                    if "campaign_key" in applied_full_df.columns:
+                        for idx_row, applied_row in applied_full_df.iterrows():
+                            campaign_key = str(applied_row.get("campaign_key", ""))
+                            if campaign_key and campaign_key in draft_by_key.index:
+                                for coeff_col in avg_month_coeff_fields:
+                                    if coeff_col in applied_full_df.columns and coeff_col in draft_by_key.columns:
+                                        applied_full_df.at[idx_row, coeff_col] = float(draft_by_key.at[campaign_key, coeff_col])
+                st.session_state[avg_month_coeffs_state_key] = applied_full_df.copy()
+                st.rerun()
+            if reset_avg_month_coeffs:
+                reset_full_df = st.session_state[avg_month_coeffs_state_key].copy()
+                if isinstance(reset_full_df, pd.DataFrame) and not reset_full_df.empty and visible_campaign_keys:
+                    reset_df = reset_full_df[reset_full_df["campaign_key"].astype(str).isin(visible_campaign_keys)].copy()
+                else:
+                    reset_df = reset_full_df.copy() if isinstance(reset_full_df, pd.DataFrame) else pd.DataFrame()
+                st.session_state[avg_month_coeffs_draft_key] = reset_df
+                st.rerun()
+            if avg_month_coeff_fields:
+                st.caption("Изменения применяются только после нажатия кнопки.")
+        with avg_month_plan_left:
+            styled_base_plan = df_base_show.style.apply(highlight_total_row, axis=1)
+            st.dataframe(styled_base_plan, width="stretch")
 
     # ---------- 3. Коэффициенты и результаты по месяцам ----------
 
@@ -6215,25 +6603,25 @@ with tab_plan:
             coeff_rows = []
             base_capacity_map = {
                 str(r["campaign_type"]): float(r.get("available_capacity_avg", 0.0) or 0.0)
-                for _, r in campaigns.iterrows()
+                for _, r in campaigns_calc.iterrows()
             }
             base_client_count_map = {
                 str(r["campaign_type"]): float(r.get("client_count_avg", 0.0) or 0.0)
-                for _, r in campaigns.iterrows()
+                for _, r in campaigns_calc.iterrows()
             }
             base_absolute_new_clients_map = {
                 str(r["campaign_type"]): float(r.get("absolute_new_clients_avg", 0.0) or 0.0)
-                for _, r in campaigns.iterrows()
+                for _, r in campaigns_calc.iterrows()
             }
             base_returned_clients_map = {
                 str(r["campaign_type"]): float(r.get("returned_clients_avg", 0.0) or 0.0)
-                for _, r in campaigns.iterrows()
+                for _, r in campaigns_calc.iterrows()
             }
             base_order_frequency_map = {
                 str(r["campaign_type"]): float(r.get("order_frequency_avg", 0.0) or 0.0)
-                for _, r in campaigns.iterrows()
+                for _, r in campaigns_calc.iterrows()
             }
-            for _, base_row in campaigns.iterrows():
+            for _, base_row in campaigns_calc.iterrows():
                 camp_type = str(base_row["campaign_type"])
                 campaign_key = get_campaign_identity_key_from_row(base_row)
 
@@ -6417,7 +6805,7 @@ with tab_plan:
                 coeffs_month = coeffs_month.copy()
                 col_left = st  # заглушка, чтобы ниже не падало
 
-            for _, base_row in campaigns.iterrows():
+            for _, base_row in campaigns_calc.iterrows():
                 campaign_type = str(base_row["campaign_type"])
                 campaign_key = get_campaign_identity_key_from_row(base_row)
                 if "campaign_key" in coeffs_month.columns:
@@ -7146,6 +7534,35 @@ with tab_plan:
             "roas": ref_roas,
             "drr": ref_drr,
         }
+        if is_diy_preset:
+            ref_shipped_orders = float(df_all["shipped_orders"].sum()) if "shipped_orders" in df_all.columns else float(df_all["target_leads"].fillna(0.0).sum()) if "target_leads" in df_all.columns else 0.0
+            ref_shipped_revenue = float(df_all["shipped_revenue"].sum()) if "shipped_revenue" in df_all.columns else 0.0
+            ref_client_count = float(df_all["client_count"].sum()) if "client_count" in df_all.columns else 0.0
+            ref_absolute_new_clients = float(df_all["absolute_new_clients"].sum()) if "absolute_new_clients" in df_all.columns else 0.0
+            ref_returned_clients = float(df_all["returned_clients"].sum()) if "returned_clients" in df_all.columns else 0.0
+            ref_new_clients = ref_absolute_new_clients + ref_returned_clients
+            ref_available_capacity = float(df_all["available_capacity"].sum()) if "available_capacity" in df_all.columns else 0.0
+            st.session_state["mp_ref_total"].update(
+                {
+                    "aov": float((ref_rev / ref_conv) if ref_conv > 0 else 0.0),
+                    "cr2": float((ref_shipped_orders / ref_conv * 100.0) if ref_conv > 0 else 0.0),
+                    "shipped_orders": ref_shipped_orders,
+                    "shipped_cps": float((ref_budget_basis / ref_shipped_orders) if ref_shipped_orders > 0 else 0.0),
+                    "shipped_aov": float((ref_shipped_revenue / ref_shipped_orders) if ref_shipped_orders > 0 else 0.0),
+                    "shipped_revenue": ref_shipped_revenue,
+                    "shipped_roas": float((ref_shipped_revenue / ref_budget_basis) if ref_budget_basis > 0 else 0.0),
+                    "shipped_drr": float((ref_budget_basis / ref_shipped_revenue * 100.0) if ref_shipped_revenue > 0 else 0.0),
+                    "client_count": ref_client_count,
+                    "absolute_new_clients": ref_absolute_new_clients,
+                    "returned_clients": ref_returned_clients,
+                    "new_clients": ref_new_clients,
+                    "new_clients_share": float((ref_new_clients / ref_client_count * 100.0) if ref_client_count > 0 else 0.0),
+                    "order_frequency": float(sum(df_all["order_frequency"].fillna(0.0)) / len(df_all)) if "order_frequency" in df_all.columns and len(df_all) > 0 else 0.0,
+                    "available_capacity": ref_available_capacity,
+                    "sov": float((ref_client_count / ref_available_capacity * 100.0) if ref_available_capacity > 0 else 0.0),
+                    "cac": float((ref_budget_basis / ref_new_clients) if ref_new_clients > 0 else 0.0),
+                }
+            )
         total_by_campaign = {}
         agg_ct = df_all.groupby("campaign_type", as_index=False).agg(
             impressions=("impressions", "sum"),
@@ -7160,6 +7577,20 @@ with tab_plan:
             ak_cost_wo_vat=("ak_cost_wo_vat", "sum"),
             revenue=("revenue", "sum"),
         )
+        for _opt_sum_col in [
+            "shipped_orders",
+            "shipped_revenue",
+            "client_count",
+            "absolute_new_clients",
+            "returned_clients",
+            "available_capacity",
+        ]:
+            if _opt_sum_col in df_all.columns:
+                _tmp = df_all.groupby("campaign_type", as_index=False)[_opt_sum_col].sum()
+                agg_ct = agg_ct.merge(_tmp, on="campaign_type", how="left")
+        if "order_frequency" in df_all.columns:
+            _tmp = df_all.groupby("campaign_type", as_index=False)["order_frequency"].mean()
+            agg_ct = agg_ct.merge(_tmp, on="campaign_type", how="left")
         for _, r in agg_ct.iterrows():
             camp = str(r.get("campaign_type", "")).strip()
             if not camp:
@@ -7209,6 +7640,35 @@ with tab_plan:
                 "roas": roas,
                 "drr": drr,
             }
+            if is_diy_preset:
+                shipped_orders = float(r.get("shipped_orders", target_leads) or 0.0)
+                shipped_revenue = float(r.get("shipped_revenue", 0.0) or 0.0)
+                client_count = float(r.get("client_count", 0.0) or 0.0)
+                absolute_new_clients = float(r.get("absolute_new_clients", 0.0) or 0.0)
+                returned_clients = float(r.get("returned_clients", 0.0) or 0.0)
+                new_clients = absolute_new_clients + returned_clients
+                available_capacity = float(r.get("available_capacity", 0.0) or 0.0)
+                total_by_campaign[camp].update(
+                    {
+                        "aov": float((rev / conv) if conv > 0 else 0.0),
+                        "cr2": float((shipped_orders / conv * 100.0) if conv > 0 else 0.0),
+                        "shipped_orders": shipped_orders,
+                        "shipped_cps": float((budget_basis / shipped_orders) if shipped_orders > 0 else 0.0),
+                        "shipped_aov": float((shipped_revenue / shipped_orders) if shipped_orders > 0 else 0.0),
+                        "shipped_revenue": shipped_revenue,
+                        "shipped_roas": float((shipped_revenue / budget_basis) if budget_basis > 0 else 0.0),
+                        "shipped_drr": float((budget_basis / shipped_revenue * 100.0) if shipped_revenue > 0 else 0.0),
+                        "client_count": client_count,
+                        "absolute_new_clients": absolute_new_clients,
+                        "returned_clients": returned_clients,
+                        "new_clients": new_clients,
+                        "new_clients_share": float((new_clients / client_count * 100.0) if client_count > 0 else 0.0),
+                        "order_frequency": float(r.get("order_frequency", 0.0) or 0.0),
+                        "available_capacity": available_capacity,
+                        "sov": float((client_count / available_capacity * 100.0) if available_capacity > 0 else 0.0),
+                        "cac": float((budget_basis / new_clients) if new_clients > 0 else 0.0),
+                    }
+                )
         st.session_state["mp_ref_total_by_campaign"] = total_by_campaign
     else:
         st.session_state["mp_ref_total"] = None
